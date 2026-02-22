@@ -1193,6 +1193,37 @@ async def get_user_created_pins(
     """
     📦 Return pins created by the requesting device.
 
+    Requires `X-Device-ID` header to identify the device (or creates the device record).
+    """
+
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Device ID required")
+
+    try:
+        auth_type = x_auth_type if x_auth_type in ('device', 'supabase') else 'device'
+        device = get_or_create_device(db, x_device_id, auth_type)
+
+        pins = db.query(Pin).filter(Pin.device_db_id == device.id).order_by(Pin.created_at.desc()).limit(limit).all()
+
+        return [
+            PinResponse(
+                id=pin.id,
+                content=pin.content,
+                created_at=pin.created_at,
+                expires_at=pin.expires_at,
+                likes=pin.likes,
+                dislikes=pin.dislikes,
+                reports=pin.reports,
+                passes_by=pin.passes_by or 0,
+                is_active=pin.is_active,
+                is_suppressed=pin.is_suppressed,
+                is_community=pin.is_community,
+            )
+            for pin in pins
+        ]
+    except Exception as e:
+        log_error("USER_CREATED_PINS", f"Failed to fetch created pins: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch created pins: {str(e)}")
 
 
 @app.get("/user/created-pins/search", response_model=list[PinResponse], tags=["User"])
