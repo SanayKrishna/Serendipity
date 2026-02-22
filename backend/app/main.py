@@ -806,7 +806,7 @@ async def record_pass_by(
     is later moved out of range without any interaction.
     """
     try:
-        pin = db.query(Pin).filter(Pin.id == pin_id, Pin.is_active == True).first()
+        pin = db.query(Pin).filter(Pin.id == pin_id, Pin.is_active).first()
         if not pin:
             return {"message": "Pin not found or inactive", "passes_by": 0}
 

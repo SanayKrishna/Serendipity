@@ -39,6 +39,7 @@ export interface DiscoveredPin {
   passes_by: number;
   is_suppressed: boolean;
   is_community?: boolean;
+  is_own_pin?: boolean;
   expires_at: string;
 }
 
@@ -493,6 +494,18 @@ class ApiService {
   async getPinStats(pinId: number): Promise<PinStatsResponse> {
     return this.executeWithRetry(async () => {
       const response = await this.client.get<PinStatsResponse>(`/pin/${pinId}/stats`);
+      return response.data;
+    });
+  }
+
+  /**
+   * Delete a pin (only creator can delete)
+   */
+  async deletePin(pinId: number): Promise<{ message: string; pin_id: number }> {
+    return this.executeWithRetry(async () => {
+      const response = await this.client.delete<{ message: string; pin_id: number }>(
+        `/pin/${pinId}`
+      );
       return response.data;
     });
   }

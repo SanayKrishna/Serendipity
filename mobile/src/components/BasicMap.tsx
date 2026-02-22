@@ -52,7 +52,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     .user-avatar-wrapper { width:60px; height:60px; transition:transform 0.15s ease-out; }
     .user-avatar-wrapper svg { width:60px; height:60px; display:block; }
     .pin-normal { border-radius:50% 50% 50% 0; border:2px solid white; transform:rotate(-45deg); }
-    .pin-comm { border-radius:50% 50% 50% 0; border:2px solid white; transform:rotate(-45deg); }
+    .pin-comm { border-radius:3px; border:2px solid white; transform:rotate(45deg); }
     .pin-muted { background:#999; border-radius:50%; border:2px solid white; opacity:.5; }
     .pin-suppressed { background:#000; border-radius:50%; opacity:.3; }
     .pin-cluster { background:#1a1a2e; color:#fff; border:3px solid rgba(255,255,255,0.9); border-radius:6px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; transform:rotate(45deg); width:32px; height:32px; }

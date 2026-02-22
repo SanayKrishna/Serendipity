@@ -150,7 +150,8 @@ const BottomSheet: React.FC<{
   onLike: (id: number) => void;
   onDislike: (id: number) => void;
   onReport: (id: number) => void;
-}> = ({ pin, userLocation, heading, onClose, onLike, onDislike, onReport }) => {
+  onDelete?: (id: number) => void;
+}> = ({ pin, userLocation, heading, onClose, onLike, onDislike, onReport, onDelete }) => {
   const { t } = useTranslation();
   const slideAnim = useRef(new Animated.Value(300)).current;
 
@@ -255,6 +256,16 @@ const BottomSheet: React.FC<{
             <Text style={styles.reportButtonText}>🚩 Report</Text>
           </TouchableOpacity>
         </View>
+        
+        {/* Delete button (only for creator) */}
+        {pin.is_own_pin && onDelete && (
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={() => onDelete(pin.id)}
+          >
+            <Text style={styles.deleteButtonText}>🗑️ Delete My Pin</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </Animated.View>
   );
@@ -358,12 +369,20 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   useFocusEffect(
     useCallback(() => {
       if (!location) {
-        // No location yet — try to get one
+        // No location yet — try to get one and discover pins
         (async () => {
           try {
             const coords = await locationService.getCurrentLocation();
             if (coords) {
               setLocation(coords);
+              // Auto-discover pins on first load
+              try {
+                const response = await apiService.discoverPins(coords.latitude, coords.longitude);
+                setDiscoveredPins(response.pins);
+                setLastScanTime(new Date());
+              } catch (e: any) {
+                console.error('Initial discover failed:', e);
+              }
             }
           } catch (e) {
             console.warn('Focus location check failed:', e);
@@ -633,6 +652,37 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     }
   };
 
+  const handleDelete = async (pinId: number) => {
+    Alert.alert(
+      'Delete Pin',
+      'Are you sure you want to permanently delete this pin?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await apiService.deletePin(pinId);
+              // Remove from discovered pins
+              setDiscoveredPins(prev => prev.filter(p => p.id !== pinId));
+              // Close bottomsheet
+              setSelectedPin(null);
+              Alert.alert('✅ Deleted', 'Pin deleted successfully');
+            } catch (e: any) {
+              console.error('Delete failed:', e);
+              if (e.statusCode === 403) {
+                Alert.alert('Error', 'You can only delete your own pins');
+              } else {
+                Alert.alert('Error', 'Failed to delete pin. Please try again.');
+              }
+            }
+          },
+        },
+      ]
+    );
+  };
+
   // Handle unmuting a pin (tap on grey marker)
   const handleUnmutePinPress = async (pinId: string) => {
     try {
@@ -813,6 +863,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         onLike={handleLike}
         onDislike={handleDislike}
         onReport={handleReport}
+        onDelete={handleDelete}
       />
 
       {/* Cluster Bottom Sheet — slides up with a list of all pins in the tapped cluster */}
@@ -1129,6 +1180,18 @@ const styles = StyleSheet.create({
   reportButtonText: {
     color: '#FFFFFF',
     fontSize: 15,
+    fontWeight: '600',
+  },
+  deleteButton: {
+    backgroundColor: '#D32F2F',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  deleteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '600',
   },
 
