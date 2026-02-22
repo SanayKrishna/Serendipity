@@ -9,11 +9,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential gcc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ./backend/requirements.txt ./requirements.txt
+# Copy requirements from the build context (when root is `backend`, files are relative)
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY ./backend ./app
+# Copy application code from the build context into the image workdir (/app)
+COPY . .
 
 EXPOSE 8000
 
