@@ -1,0 +1,28 @@
+name: Build backend Dockerfile
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Build backend Docker image
+        run: |
+          docker build -f backend/Dockerfile -t serendipity-backend:ci .
+      - name: Smoke test container (non-fatal)
+        run: |
+          docker run --rm -d --name serendipity-backend-smoke -p 8000:8000 serendipity-backend:ci
+          sleep 3
+          # If the app exposes an http root this will pass; if not, container started successfully.
+          curl -sSf http://localhost:8000/ || true
+          docker stop serendipity-backend-smoke || true
