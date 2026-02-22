@@ -12,25 +12,28 @@ import { Platform } from 'react-native';
 // SERVER URLS - Update these when they change
 // ============================================
 
-// Your computer's local IP — reads EXPO_PUBLIC_API_URL from .env first
-const LOCAL_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.32:8000';
+// Railway backend — the permanent public URL. Hardcoded as a safe fallback so
+// production builds always reach the server regardless of env var availability.
+// EAS cloud builds don't read local .env files, so we must hardcode the default.
+const RAILWAY_URL = 'https://web-production-63809.up.railway.app';
 
-// Permanent Railway backend URL — no need to update after each restart.
-// Set EXPO_PUBLIC_RAILWAY_URL in mobile/.env to your Railway service domain.
-// Falls back to the old localtunnel only if the env var is absent.
-const TUNNEL_URL = process.env.EXPO_PUBLIC_RAILWAY_URL || 'https://few-trains-care.loca.lt';
+// Permanent Railway backend URL — env var overrides hardcoded default if set.
+const TUNNEL_URL = process.env.EXPO_PUBLIC_RAILWAY_URL || RAILWAY_URL;
+
+// Your computer's local IP — only used when explicitly set via env var for local dev.
+const LOCAL_URL = process.env.EXPO_PUBLIC_API_URL || RAILWAY_URL;
 
 // ============================================
 // SMART URL SELECTION
 // ============================================
 
-// If Railway URL is explicitly configured, prefer it as the default so the
-// app works immediately on any network (mobile data, different WiFi, etc.).
-// Only fall back to LOCAL_URL if Railway is not configured.
-const hasRailwayUrl = !!process.env.EXPO_PUBLIC_RAILWAY_URL;
+// Always default to Railway (public backend) so the app works on any network.
+// LOCAL_URL is only preferred when EXPO_PUBLIC_API_URL is explicitly set to a
+// local address AND we're not on a production build.
+const isLocalDev = !!(process.env.EXPO_PUBLIC_API_URL && process.env.EXPO_PUBLIC_API_URL.includes('192.168'));
 
 // Track which URL is currently working
-let activeBaseUrl: string = hasRailwayUrl ? TUNNEL_URL : LOCAL_URL;
+let activeBaseUrl: string = isLocalDev ? LOCAL_URL : TUNNEL_URL;
 let lastFailedUrl: string | null = null;
 let lastFailTime: number = 0;
 
@@ -66,13 +69,13 @@ export const switchToFallback = (): string => {
 };
 
 /**
- * Reset to try local URL again (call periodically)
+ * Reset to try Railway URL again (call periodically)
  * Only resets if enough time has passed since last failure
  */
 export const resetToLocal = (): void => {
   const COOLDOWN = 60000; // 1 minute cooldown
-  if (lastFailedUrl === LOCAL_URL && Date.now() - lastFailTime > COOLDOWN) {
-    activeBaseUrl = LOCAL_URL;
+  if (lastFailedUrl === TUNNEL_URL && Date.now() - lastFailTime > COOLDOWN) {
+    activeBaseUrl = TUNNEL_URL;
     lastFailedUrl = null;
   }
 };
