@@ -1,0 +1,27 @@
+# Node / Expo
+node_modules/
+npm-debug.log
+yarn-error.log
+.expo/
+.expo-shared/
+mobile/.env
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Build outputs
+build/
+dist/
+*.expo.*
+
+# Misc
+.DS_Store

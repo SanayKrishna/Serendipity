@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Serendipity SNS",
+    "slug": "serendipity-sns",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sanaykrishna.serendipitysns"
+    },
+    "android": {
+      "package": "com.sanaykrishna.serendipitysns",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Serendipity to use your location to discover nearby messages."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4a8e3802-0409-4edf-a2cc-03b481a609d7"
+      }
+    }
+  }
+}
