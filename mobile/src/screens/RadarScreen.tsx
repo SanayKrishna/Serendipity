@@ -448,6 +448,8 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         const coords = await locationService.getCurrentLocation();
         if (coords) {
           setLocation(coords);
+          // Fly camera to user location
+          setFlyToLocation({ lat: coords.latitude, lon: coords.longitude });
           // Now try to discover pins with this location
           try {
             const response = await apiService.discoverPins(
@@ -469,6 +471,9 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       setRefreshing(false);
       return;
     }
+    
+    // Fly camera to user's current location
+    setFlyToLocation({ lat: location.latitude, lon: location.longitude });
     
     setDiscoveredPins([]);
     try {
