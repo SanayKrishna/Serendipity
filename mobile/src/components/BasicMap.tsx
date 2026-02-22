@@ -145,7 +145,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     fogCtx.globalCompositeOperation = 'source-over';
   }
 
-  function applyHeading(h){ document.getElementById('map').style.transform = 'rotate(' + (-h) + 'deg)'; scheduleFogRedraw(); }
+  function applyHeading(h){ /* no-op: map stays north-up, no rotation */ }
 
   var CLUSTER_THRESHOLD_M = 5;
   function clusterPins(pins){

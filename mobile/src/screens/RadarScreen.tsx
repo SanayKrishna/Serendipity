@@ -674,18 +674,6 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     }
   }, [discoveredPins]);
 
-  const getTimeSinceLastScan = () => {
-    if (!lastScanTime) return null;
-    const now = new Date();
-    const diffMs = now.getTime() - lastScanTime.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    if (diffMins < 1) return t('radar.justNow') || 'Just now';
-    if (diffMins === 1) return t('radar.oneMinuteAgo') || '1m ago';
-    if (diffMins < 60) return `${diffMins}${t('radar.minutesAgo') || 'm ago'}`;
-    const diffHrs = Math.floor(diffMins / 60);
-    return diffHrs === 1 ? t('radar.oneHourAgo') || '1h ago' : `${diffHrs}${t('radar.hoursAgo') || 'h ago'}`;
-  };
-
   // ─── LocationIQ search handlers ──────────────────────────────────────────────
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -704,7 +692,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Top Bar with Hamburger and Rescan */}
+      {/* Top Bar — exactly 3 icons: Hamburger | Search | Refresh */}
       <View style={styles.topBar}>
         {/* Hamburger Menu Button - Left */}
         <TouchableOpacity
@@ -714,20 +702,12 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           <Text style={styles.menuButtonText}>☰</Text>
         </TouchableOpacity>
 
-        {/* Scan Status - Center */}
-        {lastScanTime && (
-          <View style={styles.scanStatus}>
-            <Text style={styles.scanStatusIcon}>📡</Text>
-            <Text style={styles.scanStatusText}>{getTimeSinceLastScan()}</Text>
-          </View>
-        )}
-
-        {/* Search Button — center-right */}
+        {/* Search Button — Center */}
         <TouchableOpacity style={styles.searchButton} onPress={() => setSearchBarOpen(true)}>
           <Text style={styles.searchButtonText}>🔍</Text>
         </TouchableOpacity>
 
-        {/* Rescan Button - Right */}
+        {/* Refresh Button - Right */}
         <TouchableOpacity
           style={[styles.rescanButton, refreshing && styles.rescanButtonDisabled]}
           onPress={handleRefresh}
@@ -911,32 +891,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Scan Status (center)
-  scanStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: MiyabiColors.washi + 'E0',
-    paddingHorizontal: MiyabiSpacing.sm,
-    paddingVertical: MiyabiSpacing.xs,
-    borderRadius: 20,
-    ...MiyabiShadows.sm,
-  },
-  scanStatusIcon: {
-    fontSize: 14,
-    marginRight: 4,
-  },
-  scanStatusText: {
-    fontSize: 12,
-    color: MiyabiColors.sumi,
-    fontWeight: '500',
-  },
-
-  // Rescan Button
+  // Refresh Button — matches hamburger style
   rescanButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: MiyabiColors.bambooLight + '40',
+    backgroundColor: MiyabiColors.washi + 'F0',
     alignItems: 'center',
     justifyContent: 'center',
     ...MiyabiShadows.md,
@@ -945,7 +905,8 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   rescanButtonText: {
-    fontSize: 20,
+    fontSize: 16,
+    color: MiyabiColors.bamboo,
   },
   
   // Map Container
@@ -1236,16 +1197,17 @@ const styles = StyleSheet.create({
 
   // ─── LocationIQ Search ───────────────────────────────────────────────────────
   searchButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: MiyabiColors.washi + 'F0',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 6,
+    ...MiyabiShadows.md,
   },
   searchButtonText: {
-    fontSize: 18,
+    fontSize: 16,
+    color: MiyabiColors.bamboo,
   },
   searchOverlay: {
     position: 'absolute',
