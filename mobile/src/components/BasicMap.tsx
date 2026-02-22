@@ -70,8 +70,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   var map, userMarker, pinMarkers = [];
   var exploredCircles = [];
   var fogRAF = null;
-  var prevLat = null, prevLon = null; // track last PANNED-TO position to debounce panning
-  var lastPanTime = 0; // ms timestamp of last panTo call
+  // Map is intentionally fixed — only the user marker moves, not the viewport.
   var placeMarkers = []; // Leaflet markers for fog-circle place name labels
   var fogCanvas = document.getElementById('fog-canvas');
   var fogCtx = fogCanvas.getContext('2d');
@@ -190,7 +189,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     });
   }
 
-  function handleMessage(raw){ try{ var data = JSON.parse(raw); }catch(e){return;} if (data.type === 'updateLocation'){ var loc=data.location; var pins=data.pins||[]; currentPins=pins; var expl=data.exploredCircles||[]; var hdg = (typeof data.compassHeading==='number')?data.compassHeading:0; exploredCircles = expl; if (!map){ initMap(loc.latitude, loc.longitude); return; } userMarker.setLatLng([loc.latitude, loc.longitude]); var moved=(prevLat===null)?9999:haversine(prevLat,prevLon,loc.latitude,loc.longitude); var now=Date.now(); if(moved>30 && (now-lastPanTime)>2000){ map.panTo([loc.latitude, loc.longitude],{animate:true,duration:0.8}); prevLat=loc.latitude; prevLon=loc.longitude; lastPanTime=now; } applyHeading(hdg); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); } else if (data.type==='setHeading'){ applyHeading(data.heading); } else if (data.type==='setExploredCircles'){ exploredCircles = data.circles || []; renderPlaceNames(exploredCircles); scheduleFogRedraw(); } else if (data.type==='flyTo'){ if(map){ map.flyTo([data.lat, data.lon], 17, {animate:true, duration:1.2}); } } }
+  function handleMessage(raw){ try{ var data = JSON.parse(raw); }catch(e){return;} if (data.type === 'updateLocation'){ var loc=data.location; var pins=data.pins||[]; currentPins=pins; var expl=data.exploredCircles||[]; var hdg = (typeof data.compassHeading==='number')?data.compassHeading:0; exploredCircles = expl; if (!map){ initMap(loc.latitude, loc.longitude); return; } userMarker.setLatLng([loc.latitude, loc.longitude]); applyHeading(hdg); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); } else if (data.type==='setHeading'){ applyHeading(data.heading); } else if (data.type==='setExploredCircles'){ exploredCircles = data.circles || []; renderPlaceNames(exploredCircles); scheduleFogRedraw(); } else if (data.type==='flyTo'){ if(map){ map.flyTo([data.lat, data.lon], 17, {animate:true, duration:1.2}); } } }
 
   window.addEventListener('message', function(e){ handleMessage(e.data); }); document.addEventListener('message', function(e){ handleMessage(e.data); });
 
