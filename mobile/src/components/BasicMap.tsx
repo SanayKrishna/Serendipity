@@ -47,9 +47,10 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     #map-wrapper { width:100vw; height:100vh; position:relative; }
     #map { position:absolute; top:0; bottom:0; width:100%; transform-origin:center center; transition: transform 0.25s ease-out; }
     #fog-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:450; width:100%; height:100%; }
-    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:451; width:100%; height:100%; }
+    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:451; width:100%; height:100%; filter:blur(10px); }
 
-    .user-dot { width:20px; height:20px; border-radius:50%; background:#4A90E2; border:4px solid white; }
+    .user-avatar-wrapper { width:60px; height:60px; transition:transform 0.15s ease-out; }
+    .user-avatar-wrapper svg { width:60px; height:60px; display:block; }
     .pin-normal { border-radius:50% 50% 50% 0; border:2px solid white; transform:rotate(-45deg); }
     .pin-comm { border-radius:50% 50% 50% 0; border:2px solid white; transform:rotate(-45deg); }
     .pin-muted { background:#999; border-radius:50%; border:2px solid white; opacity:.5; }
@@ -124,28 +125,31 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
       grad.addColorStop(0.65,'rgba(150,180,240,0.40)');
       grad.addColorStop(1,'rgba(120,150,220,0.05)');
       cloudCtx.fillStyle=grad; cloudCtx.fill();
-      cloudCtx.strokeStyle='rgba(110,150,220,0.45)'; cloudCtx.lineWidth=1.5; cloudCtx.stroke();
     });
+    // 50m clearing: carve explored circles out of hex clouds (cached in AsyncStorage)
+    if(exploredCircles && exploredCircles.length>0){
+      cloudCtx.globalCompositeOperation='destination-out';
+      for(var ci=0;ci<exploredCircles.length;ci++){
+        var ec=exploredCircles[ci];
+        var ept=map.latLngToContainerPoint([ec.lat,ec.lon]);
+        var er=metersToPixels(50,ec.lat);
+        var eg=cloudCtx.createRadialGradient(ept.x,ept.y,er*0.3,ept.x,ept.y,er);
+        eg.addColorStop(0,'rgba(0,0,0,1)'); eg.addColorStop(0.85,'rgba(0,0,0,0.95)'); eg.addColorStop(1,'rgba(0,0,0,0)');
+        cloudCtx.beginPath(); cloudCtx.arc(ept.x,ept.y,er,0,Math.PI*2); cloudCtx.fillStyle=eg; cloudCtx.fill();
+      }
+      cloudCtx.globalCompositeOperation='source-over';
+    }
   }
 
   function drawFog(){
+    // No global overlay — base map (streets, buildings, water) stays fully visible
     var w = mapWrapper.offsetWidth, h = mapWrapper.offsetHeight;
-    fogCanvas.width = w; fogCanvas.height = h; fogCtx.clearRect(0,0,w,h);
-    fogCtx.fillStyle = 'rgba(80, 90, 110, 0.65)'; fogCtx.fillRect(0,0,w,h);
-    if (!exploredCircles || exploredCircles.length===0) return;
-    fogCtx.globalCompositeOperation = 'destination-out';
-    for (var i=0;i<exploredCircles.length;i++){
-      var c = exploredCircles[i];
-      var pt = map.latLngToContainerPoint([c.lat, c.lon]);
-      var r = metersToPixels(50, c.lat);
-      var grad = fogCtx.createRadialGradient(pt.x, pt.y, r*0.45, pt.x, pt.y, r*1.02);
-      grad.addColorStop(0, 'rgba(0,0,0,1)'); grad.addColorStop(0.8,'rgba(0,0,0,0.95)'); grad.addColorStop(1,'rgba(0,0,0,0)');
-      fogCtx.beginPath(); fogCtx.arc(pt.x, pt.y, r*1.02, 0, Math.PI*2); fogCtx.fillStyle = grad; fogCtx.fill();
-    }
-    fogCtx.globalCompositeOperation = 'source-over';
+    fogCanvas.width = w; fogCanvas.height = h;
+    fogCtx.clearRect(0,0,w,h);
   }
 
-  function applyHeading(h){ /* no-op: map stays north-up, no rotation */ }
+  var userLat=0, userLon=0;
+  function applyHeading(h){ var el=document.getElementById('user-avatar'); if(el) el.style.transform='rotate('+h+'deg)'; }
 
   var CLUSTER_THRESHOLD_M = 5;
   function clusterPins(pins){
@@ -175,21 +179,34 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   function initMap(initLat, initLon){
     map = L.map('map',{ center:[initLat,initLon], zoom:17, zoomControl:false, attributionControl:false });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
-    var userIcon = L.divIcon({ className:'user-dot', iconSize:[20,20], iconAnchor:[10,10] }); userMarker = L.marker([initLat,initLon],{icon:userIcon}).addTo(map);
+    var avatarHtml = '<div id="user-avatar" class="user-avatar-wrapper"><svg viewBox="0 0 60 60"><defs><filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M30 4 L40 22 L30 18 L20 22 Z" fill="rgba(74,144,226,0.35)" stroke="rgba(74,144,226,0.55)" stroke-width="0.8"/><circle cx="30" cy="30" r="8" fill="#4A90E2" stroke="white" stroke-width="3" filter="url(#glow)"/></svg></div>';
+    var userIcon = L.divIcon({ className:'', html:avatarHtml, iconSize:[60,60], iconAnchor:[30,30] }); userMarker = L.marker([initLat,initLon],{icon:userIcon,zIndexOffset:1000}).addTo(map);
     map.on('moveend zoomend viewreset resize', scheduleFogRedraw); scheduleFogRedraw(); if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
   }
 
   function renderPlaceNames(circles){
     placeMarkers.forEach(function(m){ map.removeLayer(m); }); placeMarkers = [];
+    if(!circles || circles.length===0) return;
+    // Deduplicate: one label per 150m hex cell
+    var hexLabels={};
     circles.forEach(function(c){
-      if (!c.placeName) return;
-      var icon = L.divIcon({ className:'', html:'<div class="place-label">'+c.placeName+'</div>', iconSize:[90,18], iconAnchor:[45,0] });
-      var m = L.marker([c.lat, c.lon], { icon:icon, interactive:false, keyboard:false }).addTo(map);
+      if(!c.placeName) return;
+      var ctr=_pinToHexCenter(c.lat,c.lon);
+      var key=Math.round(ctr.lat*8000)+','+Math.round(ctr.lon*8000);
+      if(!hexLabels[key]) hexLabels[key]={lat:ctr.lat, lon:ctr.lon, name:c.placeName};
+    });
+    Object.values(hexLabels).forEach(function(lbl){
+      // Proximity fade: within 30m fade to 0
+      var dist=haversine(userLat,userLon,lbl.lat,lbl.lon);
+      var opacity = dist<10 ? 0 : dist<30 ? (dist-10)/20 : 1;
+      if(opacity<0.05) return;
+      var icon=L.divIcon({ className:'', html:'<div class="place-label" style="opacity:'+opacity.toFixed(2)+'">'+lbl.name+'</div>', iconSize:[90,18], iconAnchor:[45,9] });
+      var m=L.marker([lbl.lat,lbl.lon],{icon:icon,interactive:false,keyboard:false}).addTo(map);
       placeMarkers.push(m);
     });
   }
 
-  function handleMessage(raw){ try{ var data = JSON.parse(raw); }catch(e){return;} if (data.type === 'updateLocation'){ var loc=data.location; var pins=data.pins||[]; currentPins=pins; var expl=data.exploredCircles||[]; var hdg = (typeof data.compassHeading==='number')?data.compassHeading:0; exploredCircles = expl; if (!map){ initMap(loc.latitude, loc.longitude); return; } userMarker.setLatLng([loc.latitude, loc.longitude]); applyHeading(hdg); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); } else if (data.type==='setHeading'){ applyHeading(data.heading); } else if (data.type==='setExploredCircles'){ exploredCircles = data.circles || []; renderPlaceNames(exploredCircles); scheduleFogRedraw(); } else if (data.type==='flyTo'){ if(map){ map.flyTo([data.lat, data.lon], 17, {animate:true, duration:1.2}); } } }
+  function handleMessage(raw){ try{ var data = JSON.parse(raw); }catch(e){return;} if (data.type === 'updateLocation'){ var loc=data.location; userLat=loc.latitude; userLon=loc.longitude; var pins=data.pins||[]; currentPins=pins; var expl=data.exploredCircles||[]; var hdg = (typeof data.compassHeading==='number')?data.compassHeading:0; exploredCircles = expl; if (!map){ initMap(loc.latitude, loc.longitude); return; } userMarker.setLatLng([loc.latitude, loc.longitude]); applyHeading(hdg); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); } else if (data.type==='setHeading'){ applyHeading(data.heading); } else if (data.type==='setExploredCircles'){ exploredCircles = data.circles || []; renderPlaceNames(exploredCircles); scheduleFogRedraw(); } else if (data.type==='flyTo'){ if(map){ map.flyTo([data.lat, data.lon], 17, {animate:true, duration:1.2}); } } }
 
   window.addEventListener('message', function(e){ handleMessage(e.data); }); document.addEventListener('message', function(e){ handleMessage(e.data); });
 
