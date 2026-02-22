@@ -6,14 +6,19 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import settings
 
 # Create SQLAlchemy engine (using psycopg3 driver)
-# Pool settings optimized for Supabase transaction pooler
+# Pool settings tuned for Railway free tier + Supabase free tier (max 25 connections):
+#   pool_size=3   -> base persistent connections (one per worker thread)
+#   max_overflow=4 -> burst capacity under load (total max = 7 per process)
+#   pool_pre_ping   -> drop stale connections silently (especially after cold-start)
+#   pool_recycle=300 -> refresh connections every 5 min to avoid Supabase idle timeout
 engine = create_engine(
     settings.DATABASE_URL.replace("postgresql://", "postgresql+psycopg://"), 
-    echo=True,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,  # Verify connections before using
-    pool_recycle=300,     # Recycle connections every 5 minutes
+    echo=False,  # Disabled in production to reduce log noise
+    pool_size=3,
+    max_overflow=4,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    pool_timeout=30,  # Raise clearly if no connection available within 30s
 )
 
 # Create session factory

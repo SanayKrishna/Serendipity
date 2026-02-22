@@ -22,6 +22,11 @@ from sqlalchemy.exc import IntegrityError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+import os
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
 from app.database import get_db
 from app.models import Pin, Device, PinInteraction
 from app.schemas import (
@@ -39,6 +44,25 @@ from app.config import settings
 from app.utils.content_filter import validate_content
 from app.utils.rate_limiter import limiter, RATE_LIMITS
 from app.utils.logging_middleware import RequestLoggingMiddleware, log_event, log_error
+
+# ============================================
+# SENTRY ERROR MONITORING (no-op if DSN not set)
+# ============================================
+_sentry_dsn = os.getenv("SENTRY_DSN", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[
+            FastApiIntegration(transaction_style="endpoint"),
+            SqlalchemyIntegration(),
+        ],
+        # Capture 10% of transactions for performance monitoring (free quota-friendly)
+        traces_sample_rate=0.1,
+        # Capture full request/response context on errors
+        send_default_pii=False,
+        environment=os.getenv("ENVIRONMENT", "production"),
+    )
+    log_event("SENTRY", "Sentry error monitoring initialised")
 
 
 # ============================================
@@ -209,7 +233,7 @@ async def root():
 
 @app.get("/health", response_model=MessageResponse, tags=["Health"])
 async def health_check(db: Session = Depends(get_db)):
-    """Health check with database connectivity test"""
+    """Health check with database connectivity test — used by monitoring tools."""
     try:
         # Test database connection
         db.execute(text("SELECT 1"))
@@ -219,6 +243,16 @@ async def health_check(db: Session = Depends(get_db)):
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
+
+
+@app.get("/health/fast", response_model=MessageResponse, tags=["Health"])
+async def health_check_fast():
+    """
+    ⚡ Instant health check — no database query.
+    Used by keep-warm pings, load-balancers, or CI smoke tests.
+    Returns 200 as long as the process is alive.
+    """
+    return MessageResponse(message="API is alive", success=True)
 
 
 # ============================================
@@ -812,6 +846,25 @@ async def record_pass_by(
 
         # Increment counter (no interaction uniqueness needed — server just counts)
         pin.passes_by = (pin.passes_by or 0) + 1
+
+        # If device header present, record a ghost_pin (first time device walked near this pin)
+        if x_device_id:
+            try:
+                auth_type = x_auth_type if x_auth_type in ('device', 'supabase') else 'device'
+                device = get_or_create_device(db, x_device_id, auth_type)
+
+                # Insert ghost_pin if not already recorded for this (device, pin) pair
+                db.execute(text(
+                    """
+                    INSERT INTO public.ghost_pins (device_db_id, pin_id, first_seen_at)
+                    VALUES (:device_db_id, :pin_id, now())
+                    ON CONFLICT (device_db_id, pin_id) DO NOTHING
+                    """
+                ), {"device_db_id": device.id, "pin_id": pin_id})
+            except Exception as e:
+                # Log but do not fail the entire pass-by recording for ghost insert errors
+                log_error("GHOST_PINS", f"Failed to insert ghost_pin: {str(e)}")
+
         db.commit()
         log_event("PASS_BY", "Pass-by recorded", pin_id=pin_id)
         return {"message": "Pass-by recorded", "passes_by": pin.passes_by}
@@ -1128,6 +1181,159 @@ async def get_user_stats(
     except Exception as e:
         log_error("USER_STATS", f"Failed to get user stats: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get user stats: {str(e)}")
+
+
+@app.get("/user/created-pins", response_model=list[PinResponse], tags=["User"])
+async def get_user_created_pins(
+    db: Session = Depends(get_db),
+    x_device_id: Optional[str] = Header(None, alias="X-Device-ID"),
+    x_auth_type: Optional[str] = Header('device', alias="X-Auth-Type"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of pins to return")
+):
+    """
+    📦 Return pins created by the requesting device.
+
+
+
+@app.get("/user/created-pins/search", response_model=list[PinResponse], tags=["User"])
+async def search_user_created_pins(
+    q: str = Query(..., min_length=1, description="Search query"),
+    db: Session = Depends(get_db),
+    x_device_id: Optional[str] = Header(None, alias="X-Device-ID"),
+    x_auth_type: Optional[str] = Header('device', alias="X-Auth-Type"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of pins to return")
+):
+    """
+    🔎 Full-text search over pins created by the requesting device.
+
+    Uses Postgres full-text search (plainto_tsquery) and the existing GIN index on pins.content.
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Device ID required")
+
+    try:
+        auth_type = x_auth_type if x_auth_type in ('device', 'supabase') else 'device'
+        device = get_or_create_device(db, x_device_id, auth_type)
+
+        # Use Postgres full-text search; order by rank then newest
+        sql = text("""
+            SELECT p.*,
+                   ts_rank_cd(to_tsvector('english', p.content), plainto_tsquery(:q)) AS rank
+            FROM public.pins p
+            WHERE p.device_db_id = :device_id
+              AND to_tsvector('english', p.content) @@ plainto_tsquery(:q)
+            ORDER BY rank DESC, p.created_at DESC
+            LIMIT :limit
+        """)
+
+        rows = db.execute(sql, {"q": q, "device_id": device.id, "limit": limit}).mappings().all()
+
+        results = []
+        for r in rows:
+            results.append(
+                PinResponse(
+                    id=r['id'],
+                    content=r['content'],
+                    created_at=r['created_at'],
+                    expires_at=r['expires_at'],
+                    likes=r.get('likes', 0),
+                    dislikes=r.get('dislikes', 0),
+                    reports=r.get('reports', 0),
+                    passes_by=r.get('passes_by', 0),
+                    is_active=r.get('is_active', True),
+                    is_suppressed=r.get('is_suppressed', False),
+                    is_community=r.get('is_community', False),
+                )
+            )
+
+        return results
+    except Exception as e:
+        log_error("USER_CREATED_PINS_SEARCH", f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@app.get("/user/ghost-pins", response_model=list[PinResponse], tags=["User"])
+async def get_user_ghost_pins(
+    db: Session = Depends(get_db),
+    x_device_id: Optional[str] = Header(None, alias="X-Device-ID"),
+    x_auth_type: Optional[str] = Header('device', alias="X-Auth-Type"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of pins to return")
+):
+    """
+    👻 List ghost pins (pins the device has passed by).
+
+    Returns pins recorded in `ghost_pins` for the requesting device, ordered by first seen.
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Device ID required")
+
+    try:
+        auth_type = x_auth_type if x_auth_type in ('device', 'supabase') else 'device'
+        device = get_or_create_device(db, x_device_id, auth_type)
+
+        sql = text("""
+            SELECT p.*
+            FROM public.ghost_pins g
+            JOIN public.pins p ON p.id = g.pin_id
+            WHERE g.device_db_id = :device_id
+            ORDER BY g.first_seen_at DESC
+            LIMIT :limit
+        """)
+
+        rows = db.execute(sql, {"device_id": device.id, "limit": limit}).mappings().all()
+
+        results = []
+        for r in rows:
+            results.append(
+                PinResponse(
+                    id=r['id'],
+                    content=r['content'],
+                    created_at=r['created_at'],
+                    expires_at=r['expires_at'],
+                    likes=r.get('likes', 0),
+                    dislikes=r.get('dislikes', 0),
+                    reports=r.get('reports', 0),
+                    passes_by=r.get('passes_by', 0),
+                    is_active=r.get('is_active', True),
+                    is_suppressed=r.get('is_suppressed', False),
+                    is_community=r.get('is_community', False),
+                )
+            )
+
+        return results
+    except Exception as e:
+        log_error("USER_GHOST_PINS", f"Failed to fetch ghost pins: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch ghost pins: {str(e)}")
+    Requires `X-Device-ID` header to identify the device (or creates the device record).
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Device ID required")
+
+    try:
+        auth_type = x_auth_type if x_auth_type in ('device', 'supabase') else 'device'
+        device = get_or_create_device(db, x_device_id, auth_type)
+
+        pins = db.query(Pin).filter(Pin.device_db_id == device.id).order_by(Pin.created_at.desc()).limit(limit).all()
+
+        return [
+            PinResponse(
+                id=pin.id,
+                content=pin.content,
+                created_at=pin.created_at,
+                expires_at=pin.expires_at,
+                likes=pin.likes,
+                dislikes=pin.dislikes,
+                reports=pin.reports,
+                passes_by=pin.passes_by or 0,
+                is_active=pin.is_active,
+                is_suppressed=pin.is_suppressed,
+                is_community=pin.is_community,
+            )
+            for pin in pins
+        ]
+    except Exception as e:
+        log_error("USER_CREATED_PINS", f"Failed to fetch created pins: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch created pins: {str(e)}")
 
 
 @app.get("/community/stats", tags=["Community"])

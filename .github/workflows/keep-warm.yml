@@ -1,0 +1,33 @@
+name: Keep Railway Backend Warm
+
+# Pings the backend every 10 minutes so Railway free-tier doesn't cold-start.
+# Requires one GitHub Actions secret:
+#   RAILWAY_BACKEND_URL  — your Railway public URL, e.g. https://serendipity-backend.up.railway.app
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every 10 minutes, 24/7
+  workflow_dispatch:          # allows manual trigger from GitHub Actions UI
+
+jobs:
+  ping:
+    name: Ping /health/fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping backend health endpoint
+        env:
+          BACKEND_URL: ${{ secrets.RAILWAY_BACKEND_URL }}
+        run: |
+          if [ -z "$BACKEND_URL" ]; then
+            echo "⚠️  RAILWAY_BACKEND_URL secret is not set — skipping ping."
+            exit 0
+          fi
+          echo "🏓 Pinging $BACKEND_URL/health/fast ..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$BACKEND_URL/health/fast")
+          echo "Response HTTP status: $STATUS"
+          if [ "$STATUS" -ne 200 ]; then
+            echo "❌ Backend returned $STATUS — may be down or still starting."
+            exit 1
+          fi
+          echo "✅ Backend is alive."
