@@ -24,8 +24,13 @@ const TUNNEL_URL = process.env.EXPO_PUBLIC_RAILWAY_URL || 'https://few-trains-ca
 // SMART URL SELECTION
 // ============================================
 
+// If Railway URL is explicitly configured, prefer it as the default so the
+// app works immediately on any network (mobile data, different WiFi, etc.).
+// Only fall back to LOCAL_URL if Railway is not configured.
+const hasRailwayUrl = !!process.env.EXPO_PUBLIC_RAILWAY_URL;
+
 // Track which URL is currently working
-let activeBaseUrl: string = LOCAL_URL;
+let activeBaseUrl: string = hasRailwayUrl ? TUNNEL_URL : LOCAL_URL;
 let lastFailedUrl: string | null = null;
 let lastFailTime: number = 0;
 

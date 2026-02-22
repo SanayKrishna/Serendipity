@@ -297,7 +297,12 @@ class ApiService {
       if (error.code === 'ECONNABORTED') {
         message = 'Connection timed out. The backend server may be down or the URL is wrong.';
       } else {
-        message = 'Cannot reach the backend. Set EXPO_PUBLIC_RAILWAY_URL in mobile/.env to your Railway URL.';
+        const railwayUrl = process.env.EXPO_PUBLIC_RAILWAY_URL;
+        if (railwayUrl) {
+          message = `Cannot reach backend at ${railwayUrl}. Check Railway is running and the URL is correct.`;
+        } else {
+          message = 'Cannot reach the backend. Set EXPO_PUBLIC_RAILWAY_URL in mobile/.env to your Railway URL.';
+        }
       }
     } else if (isRateLimited) {
       message = 'Too many requests. Please slow down!';
