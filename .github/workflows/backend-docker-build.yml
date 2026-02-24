@@ -18,7 +18,8 @@ jobs:
         uses: docker/setup-buildx-action@v2
       - name: Build backend Docker image
         run: |
-          docker build -f backend/Dockerfile -t serendipity-backend:ci .
+          # Use plain progress so Action logs show full Docker output for easier debugging
+          docker build --progress=plain -f backend/Dockerfile -t serendipity-backend:ci .
       - name: Smoke test container (non-fatal)
         run: |
           docker run --rm -d --name serendipity-backend-smoke -p 8000:8000 serendipity-backend:ci
