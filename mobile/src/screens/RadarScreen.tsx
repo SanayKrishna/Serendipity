@@ -19,7 +19,6 @@ import {
   FlatList,
   Modal,
   Dimensions,
-  Alert,
   ActivityIndicator,
   TextInput,
 } from 'react-native';
@@ -33,11 +32,14 @@ import locationService, { LocationCoords } from '../services/LocationService';
 import apiService, { DiscoveredPin } from '../services/ApiService';
 import pinPreferencesService from '../services/PinPreferencesService';
 import { BasicMap, ExploredCircle } from '../components';
+import { SimpleConfirmDialog } from '../components/SimpleConfirmDialog';
 import { MiyabiColors, MiyabiSpacing, MiyabiShadows } from '../styles/miyabi';
 import { reverseGeocode, forwardGeocode, GeocodeResult } from '../services/LocationIQService';
 
 // AsyncStorage key for persisting explored circles across sessions
 const FOG_STORAGE_KEY = 'serendipity_fog_circles';
+// AsyncStorage key for persisting per-pin interaction state (like/dislike/report)
+const INTERACTIONS_KEY = 'serendipity_pin_interactions';
 // Minimum distance (metres) between consecutive fog circles
 const FOG_CIRCLE_STRIDE = 15;
 
@@ -66,7 +68,7 @@ interface MapPin {
   isMuted?: boolean; // For greyed out display (personal hide)
 }
 
-const { width, height } = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 /**
  * Calculate bearing (azimuth) from point A to point B
@@ -89,30 +91,30 @@ const calculateBearing = (lat1: number, lon1: number, lat2: number, lon2: number
  * @param bearing - absolute bearing to destination (0-360)
  * @param heading - current device heading (0-360)
  */
-const getDirectionGuidance = (bearing: number, heading: number): string => {
+const getDirectionGuidance = (bearing: number, heading: number, t: (key: string) => string): string => {
   // Calculate relative angle (-180 to 180)
   let relative = bearing - heading;
   if (relative > 180) relative -= 360;
   if (relative < -180) relative += 360;
 
-  // Get compass direction
-  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  // Get compass direction using i18n keys
+  const dirKeys = ['dirN', 'dirNE', 'dirE', 'dirSE', 'dirS', 'dirSW', 'dirW', 'dirNW'];
   const index = Math.round(bearing / 45) % 8;
-  const compass = directions[index];
+  const compass = t(`radar.${dirKeys[index]}`);
 
-  // Get relative guidance
-  let guidance;
+  // Get relative guidance using i18n keys
+  let guidanceKey: string;
   if (Math.abs(relative) < 20) {
-    guidance = 'Straight ahead';
+    guidanceKey = 'radar.dirStraight';
   } else if (Math.abs(relative) > 160) {
-    guidance = 'Behind you';
+    guidanceKey = 'radar.dirBehind';
   } else if (relative > 0) {
-    guidance = relative < 90 ? 'On your right' : 'On your right (turn around)';
+    guidanceKey = relative < 90 ? 'radar.dirRight' : 'radar.dirRightTurn';
   } else {
-    guidance = relative > -90 ? 'On your left' : 'On your left (turn around)';
+    guidanceKey = relative > -90 ? 'radar.dirLeft' : 'radar.dirLeftTurn';
   }
 
-  return `📍 ${compass} • ${guidance}`;
+  return `📍 ${compass} • ${t(guidanceKey)}`;
 };
 
 // Convert DiscoveredPins to MapPins for BasicMap
@@ -151,7 +153,8 @@ const BottomSheet: React.FC<{
   onDislike: (id: number) => void;
   onReport: (id: number) => void;
   onDelete?: (id: number) => void;
-}> = ({ pin, userLocation, heading, onClose, onLike, onDislike, onReport, onDelete }) => {
+  userInteraction?: 'liked' | 'disliked' | 'reported' | null;
+}> = ({ pin, userLocation, heading, onClose, onLike, onDislike, onReport, onDelete, userInteraction }) => {
   const { t } = useTranslation();
   const slideAnim = useRef(new Animated.Value(300)).current;
 
@@ -174,6 +177,9 @@ const BottomSheet: React.FC<{
 
   if (!pin) return null;
 
+  const expiresDate = new Date(pin.expires_at);
+  const expiresStr = expiresDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
   return (
     <Animated.View
       style={[
@@ -182,20 +188,25 @@ const BottomSheet: React.FC<{
       ]}
     >
       <View style={styles.bottomSheetHandle} />
-      
+
+      {/* Header: badge + close */}
       <View style={styles.bottomSheetHeader}>
-        <View style={styles.bottomSheetDistance}>
-          <Text style={styles.bottomSheetDistanceIcon}>📍</Text>
-          <Text style={styles.bottomSheetDistanceText}>
-            {Math.round(pin.distance_meters)}m away
-          </Text>
+        <View style={styles.bsHeaderLeft}>
+          {pin.is_community && (
+            <View style={styles.communityBadge}>
+              <Text style={styles.communityBadgeText}>★ {t('radar.communityBadge')}</Text>
+            </View>
+          )}
+          <View style={styles.distanceChip}>
+            <Text style={styles.distanceChipText}>📍 {Math.round(pin.distance_meters)}m</Text>
+          </View>
         </View>
         <TouchableOpacity onPress={onClose} style={styles.bottomSheetClose}>
           <Text style={styles.bottomSheetCloseText}>✕</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Navigation Guidance */}
+      {/* Navigation compass bar */}
       {userLocation && pin.latitude !== undefined && pin.longitude !== undefined && (
         <View style={styles.navigationBar}>
           <Text style={styles.navigationText}>
@@ -206,66 +217,406 @@ const BottomSheet: React.FC<{
                 pin.latitude,
                 pin.longitude
               ),
-              heading
+              heading,
+              t
             )}
           </Text>
         </View>
       )}
 
-      <ScrollView style={styles.bottomSheetContent}>
+      <ScrollView
+        style={styles.bottomSheetContent}
+        contentContainerStyle={styles.bottomSheetContentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Message */}
         <Text style={styles.bottomSheetMessage}>{pin.content}</Text>
-        
-        <View style={styles.bottomSheetStats}>
-          <View style={styles.statItem}>
-            <Text style={styles.statIcon}>❤️</Text>
-            <Text style={styles.statText}>{pin.likes} {t('radar.likes')}</Text>
+
+        {/* Stats — 2×2 grid */}
+        <View style={styles.statsGrid}>
+          <View style={styles.statChip}>
+            <Text style={styles.statChipIcon}>❤️</Text>
+            <Text style={styles.statChipText}>{pin.likes} {t('radar.likes')}</Text>
           </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statIcon}>🚩</Text>
-            <Text style={styles.statText}>{pin.reports} {t('radar.reports')}</Text>
+          <View style={styles.statChip}>
+            <Text style={styles.statChipIcon}>👣</Text>
+            <Text style={styles.statChipText}>{pin.passes_by ?? 0} {t('radar.passed')}</Text>
           </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statIcon}>👣</Text>
-            <Text style={styles.statText}>{pin.passes_by ?? 0} passed</Text>
+          <View style={styles.statChip}>
+            <Text style={styles.statChipIcon}>🚩</Text>
+            <Text style={styles.statChipText}>{pin.reports} {t('radar.reports')}</Text>
           </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statIcon}>⏱️</Text>
-            <Text style={styles.statText}>
-              {t('radar.expires')} {new Date(pin.expires_at).toLocaleDateString()}
-            </Text>
+          <View style={styles.statChip}>
+            <Text style={styles.statChipIcon}>⏳</Text>
+            <Text style={styles.statChipText} numberOfLines={1}>{t('radar.expires')} {expiresStr}</Text>
           </View>
         </View>
 
-        <View style={styles.bottomSheetActions}>
+        {/* Actions row 1: Like + Dislike */}
+        <View style={styles.actionsRow}>
           <TouchableOpacity
-            style={styles.likeButton}
+            style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#B71C1C' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
             onPress={() => onLike(pin.id)}
+            activeOpacity={0.8}
+            disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
           >
             <Text style={styles.likeButtonText}>❤️ {t('radar.like')}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.dislikeButton}
+            style={[styles.dislikeButton, userInteraction === 'disliked' && { backgroundColor: '#FFCDD2', borderColor: '#EF9A9A' }, (userInteraction === 'liked' || userInteraction === 'reported') && { opacity: 0.4 }]}
             onPress={() => onDislike(pin.id)}
+            activeOpacity={0.8}
+            disabled={userInteraction === 'liked' || userInteraction === 'reported'}
           >
             <Text style={styles.dislikeButtonText}>💔 {t('radar.dislike')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.reportButton}
-            onPress={() => onReport(pin.id)}
-          >
-            <Text style={styles.reportButtonText}>🚩 Report</Text>
-          </TouchableOpacity>
         </View>
-        
-        {/* Delete button (only for creator) */}
+
+        {/* Actions row 2: Report (full width) */}
+        <TouchableOpacity
+          style={[styles.reportButton, userInteraction === 'reported' && { backgroundColor: '#FFE0B2', borderColor: '#FFCC80' }, (userInteraction === 'liked' || userInteraction === 'disliked') && { opacity: 0.4 }]}
+          onPress={() => onReport(pin.id)}
+          activeOpacity={0.8}
+          disabled={userInteraction === 'liked' || userInteraction === 'disliked'}
+        >
+          <Text style={styles.reportButtonText}>🚩 {t('radar.reportBtn')}</Text>
+        </TouchableOpacity>
+
+        {/* Delete — only for own pins */}
         {pin.is_own_pin && onDelete && (
           <TouchableOpacity
             style={styles.deleteButton}
             onPress={() => onDelete(pin.id)}
+            activeOpacity={0.8}
           >
-            <Text style={styles.deleteButtonText}>🗑️ Delete My Pin</Text>
+            <Text style={styles.deleteButtonText}>🗑️ {t('radar.deleteBtn')}</Text>
           </TouchableOpacity>
         )}
+
+        <View style={{ height: 24 }} />
+      </ScrollView>
+    </Animated.View>
+  );
+};
+
+// ── Helpers shared with CommunityHubSheet ────────────────────────────────────
+const COMMUNITY_HUB_COLORS = [
+  '#7B1FA2', '#1565C0', '#00695C', '#AD1457', '#E65100',
+  '#4527A0', '#2E7D32', '#283593', '#BF360C', '#006064',
+];
+function computeZoneKey(lat: number, lon: number): string {
+  const n = Math.abs(Math.round(lat * 1000) * 31 + Math.round(lon * 1000) * 17) % 65536;
+  return n.toString(16).toUpperCase().padStart(4, '0');
+}
+function hubZoneColor(lat: number, lon: number): string {
+  const key = computeZoneKey(lat, lon);
+  return COMMUNITY_HUB_COLORS[parseInt(key, 16) % COMMUNITY_HUB_COLORS.length];
+}
+
+// ── Community Hub Sheet — shown when a community pin is tapped ────────────────
+const CommunityHubSheet: React.FC<{
+  pin: DiscoveredPin | null;
+  zonePins: DiscoveredPin[];
+  userLocation: LocationCoords | null;
+  heading: number;
+  onClose: () => void;
+  onLike: (id: number) => void;
+  onDislike: (id: number) => void;
+  onReport: (id: number) => void;
+  onDelete?: (id: number) => void;
+  userInteraction?: 'liked' | 'disliked' | 'reported' | null;
+}> = ({ pin, zonePins, userLocation, heading, onClose, onLike, onDislike, onReport, onDelete, userInteraction }) => {
+  const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState<'board' | 'members'>('board');
+  const [chatMsg, setChatMsg] = useState('');
+  const [chatLog, setChatLog] = useState<{ text: string }[]>([]);
+  const slideAnim = useRef(new Animated.Value(600)).current;
+
+  useEffect(() => {
+    if (pin) {
+      setActiveTab('board');
+      setChatLog([]);
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 65,
+        friction: 11,
+      }).start();
+    } else {
+      Animated.timing(slideAnim, {
+        toValue: 600,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [pin]);
+
+  if (!pin) return null;
+
+  const color       = hubZoneColor(pin.latitude, pin.longitude);
+  const zoneKey     = computeZoneKey(pin.latitude, pin.longitude);
+  const pulse       = Math.max(pin.passes_by ?? 0, pin.likes);
+  const within200   = (pin.distance_meters ?? Infinity) <= 200;
+  const trending    = [...zonePins].sort((a, b) => b.likes - a.likes);
+
+  const sendChat = () => {
+    if (!chatMsg.trim()) return;
+    setChatLog(prev => [...prev, { text: chatMsg.trim() }]);
+    setChatMsg('');
+  };
+
+  const expiresDate = new Date(pin.expires_at);
+  const expiresStr  = expiresDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+  return (
+    <Animated.View style={[styles.bottomSheet, { transform: [{ translateY: slideAnim }] }]}>
+      <View style={styles.bottomSheetHandle} />
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <View style={[styles.bottomSheetHeader, { borderBottomWidth: 2, borderBottomColor: color }]}>
+        <View style={styles.bsHeaderLeft}>
+          <View style={[styles.communityBadge, { backgroundColor: color }]}>
+            <Text style={styles.communityBadgeText}>★ {t('hub.zone')} {zoneKey.slice(0, 2)}</Text>
+          </View>
+          <View style={styles.distanceChip}>
+            <Text style={styles.distanceChipText}>📍 {Math.round(pin.distance_meters)}m</Text>
+          </View>
+        </View>
+        <TouchableOpacity onPress={onClose} style={styles.bottomSheetClose}>
+          <Text style={styles.bottomSheetCloseText}>✕</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Pulse row (headcount) ───────────────────────────────────────── */}
+      <View style={[styles.communityPulse, { backgroundColor: color + '18' }]}>
+        <View style={styles.pulseLeft}>
+          <Text style={styles.pulseIcon}>🔥</Text>
+          <Text style={styles.pulseText}>{pulse} {pulse === 1 ? t('hub.visitedOne') : t('hub.visitedMany')}</Text>
+        </View>
+        <View style={[styles.pulseDot, { backgroundColor: within200 ? '#4CAF50' : '#9E9E9E' }]} />
+        <Text style={[styles.pulseStatus, { color: within200 ? '#4CAF50' : '#9E9E9E' }]}>
+          {within200 ? t('hub.inRange') : t('hub.outRange')}
+        </Text>
+      </View>
+
+      {/* ── Navigation compass bar ──────────────────────────────────────── */}
+      {userLocation && (
+        <View style={styles.navigationBar}>
+          <Text style={styles.navigationText}>
+            {getDirectionGuidance(
+              calculateBearing(userLocation.latitude, userLocation.longitude, pin.latitude, pin.longitude),
+              heading,
+              t
+            )}
+          </Text>
+        </View>
+      )}
+
+      {/* ── Tab bar ─────────────────────────────────────────────────────── */}
+      <View style={styles.communityTabBar}>
+        {(['board', 'members'] as const).map(tab => (
+          <TouchableOpacity
+            key={tab}
+            style={[styles.communityTab, activeTab === tab && { borderBottomColor: color, borderBottomWidth: 2 }]}
+            onPress={() => setActiveTab(tab)}
+          >
+            <Text style={[styles.communityTabText, activeTab === tab && { color }]}>
+              {tab === 'board' ? `📋 ${t('hub.boardTab')}` : `👥 ${t('hub.membersTab')}`}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* ── Tab content ─────────────────────────────────────────────────── */}
+      <ScrollView
+        style={styles.bottomSheetContent}
+        contentContainerStyle={styles.bottomSheetContentContainer}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* ══════════ BOARD TAB ══════════ */}
+        {activeTab === 'board' && (
+          <>
+            {/* Pin text */}
+            <Text style={styles.bottomSheetMessage}>{pin.content}</Text>
+
+            {/* Stats grid */}
+            <View style={styles.statsGrid}>
+              <View style={styles.statChip}>
+                <Text style={styles.statChipIcon}>❤️</Text>
+                <Text style={styles.statChipText}>{pin.likes} {t('radar.likes')}</Text>
+              </View>
+              <View style={styles.statChip}>
+                <Text style={styles.statChipIcon}>👣</Text>
+                <Text style={styles.statChipText}>{pin.passes_by ?? 0} {t('radar.passed')}</Text>
+              </View>
+              <View style={styles.statChip}>
+                <Text style={styles.statChipIcon}>📌</Text>
+                <Text style={styles.statChipText}>{t('hub.zonePins', { count: zonePins.length })}</Text>
+              </View>
+              <View style={styles.statChip}>
+                <Text style={styles.statChipIcon}>⏳</Text>
+                <Text style={styles.statChipText} numberOfLines={1}>{t('radar.expires')} {expiresStr}</Text>
+              </View>
+            </View>
+
+            {/* Actions */}
+            <View style={styles.actionsRow}>
+              <TouchableOpacity
+                style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#B71C1C' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+                onPress={() => onLike(pin.id)}
+                activeOpacity={0.8}
+                disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
+              >
+                <Text style={styles.likeButtonText}>❤️ {t('radar.like')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.checkInButton, { backgroundColor: within200 ? color : '#E0E0E0' }]}
+                disabled={!within200}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.checkInButtonText, { color: within200 ? '#FFF' : '#9E9E9E' }]}>
+                  {within200 ? `✓ ${t('hub.checkedIn')}` : `📍 ${t('hub.checkIn')}`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[styles.reportButton, userInteraction === 'reported' && { backgroundColor: '#FFE0B2', borderColor: '#FFCC80' }, (userInteraction === 'liked' || userInteraction === 'disliked') && { opacity: 0.4 }]}
+              onPress={() => onReport(pin.id)}
+              activeOpacity={0.8}
+              disabled={userInteraction === 'liked' || userInteraction === 'disliked'}
+            >
+              <Text style={styles.reportButtonText}>🚩 {t('radar.reportBtn')}</Text>
+            </TouchableOpacity>
+            {pin.is_own_pin && onDelete && (
+              <TouchableOpacity style={styles.deleteButton} onPress={() => onDelete(pin.id)} activeOpacity={0.8}>
+                <Text style={styles.deleteButtonText}>🗑️ {t('radar.deleteBtn')}</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Zone Board: other pins from nearby */}
+            {trending.filter(p => p.id !== pin.id).length > 0 && (
+              <>
+                <Text style={[styles.boardSectionTitle, { marginTop: 16 }]}>📋 {t('hub.zoneBoard')}</Text>
+                {trending.filter(p => p.id !== pin.id).slice(0, 5).map(p => (
+                  <View key={p.id} style={[styles.boardCard, { borderLeftColor: color }]}>
+                    <Text style={styles.boardCardContent} numberOfLines={2}>{p.content}</Text>
+                    <Text style={styles.boardCardMeta}>❤️ {p.likes}  👣 {p.passes_by ?? 0}</Text>
+                  </View>
+                ))}
+              </>
+            )}
+
+            {/* Live Chat */}
+            <Text style={[styles.boardSectionTitle, { marginTop: 16 }]}>💬 {t('hub.liveChat')}</Text>
+            {!within200 ? (
+              <View style={styles.chatLockNote}>
+                <Text style={styles.chatLockText}>🔒 {t('hub.chatLocked')}</Text>
+              </View>
+            ) : (
+              <>
+                <ScrollView style={styles.chatLog} nestedScrollEnabled>
+                  {chatLog.length === 0 ? (
+                    <Text style={styles.chatEmptyText}>No messages yet — say hi! 👋</Text>
+                  ) : (
+                    chatLog.map((m, i) => (
+                      <View key={i} style={styles.chatBubble}>
+                        <Text style={styles.chatBubbleText}>{m.text}</Text>
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+                <View style={styles.chatInputRow}>
+                  <TextInput
+                    style={styles.chatInput}
+                    value={chatMsg}
+                    onChangeText={setChatMsg}
+                    placeholder={t('hub.chatPlaceholder')}
+                    placeholderTextColor="#B39DDB"
+                    returnKeyType="send"
+                    onSubmitEditing={sendChat}
+                  />
+                  <TouchableOpacity
+                    style={[styles.chatSendBtn, { backgroundColor: color }]}
+                    onPress={sendChat}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.chatSendBtnText}>↑</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ══════════ MEMBERS TAB ══════════ */}
+        {activeTab === 'members' && (
+          <>
+            <Text style={styles.boardSectionTitle}>🏆 {t('hub.topContribs')}</Text>
+            <Text style={styles.memberAnonNote}>{t('hub.anonNote')}</Text>
+
+            {trending.length === 0 ? (
+              <View style={styles.emptyMembersCard}>
+                <Text style={styles.emptyMembersText}>{t('hub.noContribs')}</Text>
+              </View>
+            ) : (
+              trending.slice(0, 5).map((p, i) => {
+                const avatarColor = COMMUNITY_HUB_COLORS[(parseInt(zoneKey, 16) + i + 1) % COMMUNITY_HUB_COLORS.length];
+                return (
+                  <View key={p.id} style={styles.memberRow}>
+                    {/* Hex avatar */}
+                    <View style={styles.memberAvatarWrap}>
+                      {[0, 60, 120].map(deg => (
+                        <View
+                          key={deg}
+                          style={[
+                            styles.memberAvatarLayer,
+                            {
+                              backgroundColor: avatarColor,
+                              transform: [{ rotate: `${deg}deg` }],
+                            },
+                          ]}
+                        />
+                      ))}
+                      <Text style={styles.memberAvatarLabel}>#{i + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.memberPreview} numberOfLines={1}>{p.content}</Text>
+                      <Text style={styles.memberMeta}>❤️ {p.likes}  👣 {p.passes_by ?? 0}</Text>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+
+            {/* Check-in / See who's here banner */}
+            <View style={[styles.checkInBanner, { borderColor: color }]}>
+              <Text style={styles.checkInBannerTitle}>📍 {t('hub.checkInTitle')}</Text>
+              <Text style={styles.checkInBannerSub}>
+                {within200
+                  ? t('hub.inRangeSub')
+                  : t('hub.outRangeSub', { distance: Math.round(pin.distance_meters) })}
+              </Text>
+              {within200 && (
+                <View style={[styles.checkInActiveBadge, { backgroundColor: color }]}>
+                  <Text style={styles.checkInActiveBadgeText}>✓ {t('hub.activeInZone')}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Dislike + report */}
+            <TouchableOpacity
+              style={[styles.dislikeButton, userInteraction === 'disliked' && { backgroundColor: '#FFCDD2', borderColor: '#EF9A9A' }, (userInteraction === 'liked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+              onPress={() => onDislike(pin.id)}
+              activeOpacity={0.8}
+              disabled={userInteraction === 'liked' || userInteraction === 'reported'}
+            >
+              <Text style={styles.dislikeButtonText}>💔 {t('radar.dislike')}</Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        <View style={{ height: 24 }} />
       </ScrollView>
     </Animated.View>
   );
@@ -280,10 +631,8 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const [mapPins, setMapPins] = useState<MapPin[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [apiConnected, setApiConnected] = useState<boolean | null>(null);
   const [selectedPin, setSelectedPin] = useState<DiscoveredPin | null>(null);
   const [heading, setHeading] = useState<number>(0);
-  const [lastScanTime, setLastScanTime] = useState<Date | null>(null);
   // Fog of war
   const [exploredCircles, setExploredCircles] = useState<ExploredCircle[]>([]);
   const lastFogCircleRef = useRef<ExploredCircle | null>(null);
@@ -293,19 +642,69 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   // Community filter — mirrors toggle in CommunityScreen via AsyncStorage
   const [communityFilterActive, setCommunityFilterActive] = useState(false);
   const dismissedPinIds = useRef<Set<number>>(new Set()).current;
+  // Per-pin interaction tracking: liked | disliked | reported | null
+  const [pinInteractions, setPinInteractions] = useState<Record<number, 'liked' | 'disliked' | 'reported' | null>>({});
+
+  // Community Hub: pins in the same zone (≤ 100m) as the selected community pin
+  const [zonePins, setZonePins] = useState<DiscoveredPin[]>([]);
+  useEffect(() => {
+    if (selectedPin?.is_community) {
+      setZonePins(
+        discoveredPins.filter(p =>
+          p.is_community &&
+          haversineMeters(selectedPin.latitude, selectedPin.longitude, p.latitude, p.longitude) <= 100
+        )
+      );
+    } else {
+      setZonePins([]);
+    }
+  }, [selectedPin, discoveredPins]);
 
   // LocationIQ search
   const [flyToLocation, setFlyToLocation] = useState<{ lat: number; lon: number; label?: string } | null>(null);
+  // Increment to tell BasicMap to animate rotation back to 0°
+  const [resetMapToken, setResetMapToken] = useState(0);
   const [searchBarOpen, setSearchBarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<GeocodeResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // Themed dialog state (replaces Alert.alert)
+  const dialogActionRef = useRef<(() => void) | null>(null);
+  const [dialog, setDialog] = useState({ visible: false, title: '', message: '', confirmText: 'OK', cancelText: '', isDangerous: false });
+  const showInfo = (title: string, message: string) => {
+    dialogActionRef.current = null;
+    setDialog({ visible: true, title, message, confirmText: 'OK', cancelText: '', isDangerous: false });
+  };
+  const showConfirm = (title: string, message: string, onConfirm: () => void, isDangerous = false) => {
+    dialogActionRef.current = onConfirm;
+    setDialog({ visible: true, title, message, confirmText: isDangerous ? 'Delete' : 'Confirm', cancelText: 'Cancel', isDangerous });
+  };
+  const dismissDialog = () => setDialog(d => ({ ...d, visible: false }));
+  const handleDialogConfirm = () => { dismissDialog(); dialogActionRef.current?.(); };
+
+  // Turn off the community-only map filter and persist the change
+  const turnOffCommunityFilter = async () => {
+    setCommunityFilterActive(false);
+    try { await AsyncStorage.setItem(COMMUNITY_FILTER_KEY, 'false'); } catch (_) {}
+  };
+
+  // Save a pin interaction to state + AsyncStorage
+  const saveInteraction = async (pinId: number, type: 'liked' | 'disliked' | 'reported' | null) => {
+    const next = { ...pinInteractions, [pinId]: type };
+    setPinInteractions(next);
+    try { await AsyncStorage.setItem(INTERACTIONS_KEY, JSON.stringify(next)); } catch (_) {}
+  };
 
   // Initialize tracking + heading subscription on mount
   useEffect(() => {
     loadFogCircles();
     initializeTracking();
     checkApiConnection();
+    // Load persisted pin interactions
+    AsyncStorage.getItem(INTERACTIONS_KEY).then(raw => {
+      if (raw) setPinInteractions(JSON.parse(raw));
+    }).catch(() => {});
 
     let headingSub: Location.LocationSubscription | null = null;
     (async () => {
@@ -379,7 +778,6 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
               try {
                 const response = await apiService.discoverPins(coords.latitude, coords.longitude);
                 setDiscoveredPins(response.pins);
-                setLastScanTime(new Date());
               } catch (e: any) {
                 console.error('Initial discover failed:', e);
               }
@@ -411,8 +809,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   }, [discoveredPins, location, communityFilterActive]);
 
   const checkApiConnection = async () => {
-    const connected = await apiService.healthCheck();
-    setApiConnected(connected);
+    await apiService.healthCheck();
   };
 
   const initializeTracking = async () => {
@@ -425,16 +822,10 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         setLocation(coords);
         maybeAddFogCircle(coords);
       },
-      // On pins discovered
+      // On pins discovered — replace list each heartbeat so expired pins disappear
+      // automatically; dismissed pins are filtered out via the ref.
       (pins) => {
-        setDiscoveredPins((prev) => {
-          // Merge new pins, avoiding duplicates AND dismissed pins
-          const existingIds = new Set(prev.map((p) => p.id));
-          const newPins = pins.filter(
-            (p) => !existingIds.has(p.id) && !dismissedPinIds.has(p.id)
-          );
-          return [...newPins, ...prev];
-        });
+        setDiscoveredPins(pins.filter((p) => !dismissedPinIds.has(p.id)));
       },
       // On error
       (err) => {
@@ -459,6 +850,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const handleRefresh = async () => {
     setRefreshing(true);
     setError(null);
+    setResetMapToken(prev => prev + 1);  // reset map rotation to 0°
     await checkApiConnection();
     
     // If we don't have location yet, try to get it first
@@ -476,7 +868,6 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
               coords.longitude
             );
             setDiscoveredPins(response.pins);
-            setLastScanTime(new Date());
           } catch (e: any) {
             console.error('Discover failed:', e);
           }
@@ -501,7 +892,6 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         location.longitude
       );
       setDiscoveredPins(response.pins);
-      setLastScanTime(new Date());
     } catch (e: any) {
       console.error('Refresh failed:', e);
       if (apiService.isOfflineError(e)) {
@@ -517,6 +907,18 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   };
 
   const handleLike = async (pinId: number) => {
+    // Interaction lock: check if user already rated this pin
+    const current = pinInteractions[pinId];
+    if (current === 'liked') {
+      // Toggle off (undo like)
+      saveInteraction(pinId, null);
+      return;
+    }
+    if (current === 'disliked' || current === 'reported') {
+      showInfo(t('radar.alreadyInteracted'), t('radar.alreadyInteractedMsg'));
+      return;
+    }
+    saveInteraction(pinId, 'liked');
     locationService.markPinInteracted(pinId);
     // Optimistic update - update UI immediately
     const optimisticUpdate = (pins: DiscoveredPin[]) =>
@@ -543,6 +945,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     } catch (e: any) {
       console.error('Like failed:', e);
       // Revert optimistic update on error
+      saveInteraction(pinId, null);
       setDiscoveredPins((prev) =>
         prev.map((p) =>
           p.id === pinId ? { ...p, likes: Math.max(0, p.likes - 1) } : p
@@ -552,19 +955,26 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         setSelectedPin({ ...selectedPin, likes: Math.max(0, selectedPin.likes - 1) });
       }
       if (apiService.isRateLimitError(e)) {
-        setError('Too many likes! Slow down.');
+        setError(t('radar.tooManyLikes'));
       } else {
-        setError('Failed to like pin. Please try again.');
+        setError(t('radar.likeFailed'));
       }
     }
   };
 
   const handleDislike = async (pinId: number) => {
+    // Interaction lock
+    const current = pinInteractions[pinId];
+    if (current === 'disliked') { saveInteraction(pinId, null); return; }
+    if (current === 'liked' || current === 'reported') {
+      showInfo(t('radar.alreadyInteracted'), t('radar.alreadyInteractedMsg'));
+      return;
+    }
+    saveInteraction(pinId, 'disliked');
     locationService.markPinInteracted(pinId);
     // Dislike the pin
     try {
       const result = await apiService.dislikePin(pinId);
-      // Update the pin in the list with new counts
       const updatedPins = discoveredPins.map((pin) => {
         if (pin.id === pinId) {
           return {
@@ -577,24 +987,27 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         return pin;
       });
       setDiscoveredPins(updatedPins);
-      // Update map pins
       if (location) {
-        const updated = await convertToMapPins(
-          updatedPins,
-          location.latitude,
-          location.longitude
-        );
+        const updated = await convertToMapPins(updatedPins, location.latitude, location.longitude);
         setMapPins(updated);
       }
-      // Close detail view
       setSelectedPin(null);
     } catch (e: any) {
       console.error('Dislike failed:', e);
-      setError('Failed to dislike pin. Please try again.');
+      saveInteraction(pinId, null);
+      setError(t('radar.dislikeFailed'));
     }
   };
 
   const handleReport = async (pinId: number) => {
+    // Interaction lock
+    const current = pinInteractions[pinId];
+    if (current === 'reported') { saveInteraction(pinId, null); return; }
+    if (current === 'liked' || current === 'disliked') {
+      showInfo(t('radar.alreadyInteracted'), t('radar.alreadyInteractedMsg'));
+      return;
+    }
+    saveInteraction(pinId, 'reported');
     locationService.markPinInteracted(pinId);
     // Optimistic update - increment reports and check suppression immediately
     const optimisticUpdate = (pins: DiscoveredPin[]) =>
@@ -637,49 +1050,42 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         setSelectedPin({ ...selectedPin, reports: response.reports, is_suppressed: response.is_suppressed });
       }
       // Show feedback
-      Alert.alert(
-        'Reported',
+      showInfo(
+        t('radar.reported'),
         response.is_suppressed 
-          ? 'Pin reported and suppressed (too many reports)' 
-          : `Pin reported (${response.reports} total reports)`,
-        [{ text: 'OK' }]
+          ? t('radar.pinReportedSuppressed')
+          : t('radar.pinReportedCount', { count: response.reports })
       );
     } catch (e: any) {
       console.error('Report failed:', e);
       if (apiService.isRateLimitError(e)) {
-        setError('Too many reports! Slow down.');
+        setError(t('radar.tooManyReports'));
       }
     }
   };
 
-  const handleDelete = async (pinId: number) => {
-    Alert.alert(
-      'Delete Pin',
+  const handleDelete = (pinId: number) => {
+    showConfirm(
+      t('radar.deleteBtn'),
       'Are you sure you want to permanently delete this pin?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await apiService.deletePin(pinId);
-              // Remove from discovered pins
-              setDiscoveredPins(prev => prev.filter(p => p.id !== pinId));
-              // Close bottomsheet
-              setSelectedPin(null);
-              Alert.alert('✅ Deleted', 'Pin deleted successfully');
-            } catch (e: any) {
-              console.error('Delete failed:', e);
-              if (e.statusCode === 403) {
-                Alert.alert('Error', 'You can only delete your own pins');
-              } else {
-                Alert.alert('Error', 'Failed to delete pin. Please try again.');
-              }
-            }
-          },
-        },
-      ]
+      async () => {
+        const previousPins = discoveredPins;
+        setSelectedPin(null);
+        setDiscoveredPins(prev => prev.filter(p => p.id !== pinId));
+        showInfo(t('radar.deleted'), t('radar.pinDeletedSuccess'));
+        try {
+          await apiService.deletePin(pinId);
+        } catch (e: any) {
+          setDiscoveredPins(previousPins);
+          console.error('Delete failed:', e);
+          if (e.statusCode === 403) {
+            showInfo('Error', t('radar.pinDeletedErrorOwn'));
+          } else {
+            showInfo('Error', t('radar.pinDeletedFail'));
+          }
+        }
+      },
+      true
     );
   };
 
@@ -696,16 +1102,12 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       }
       
       // Show brief feedback
-      Alert.alert(
-        '🔔 Unmuted',
-        'You\'ll now receive notifications for this location again!',
-        [{ text: 'OK' }]
-      );
+      showInfo('🔔 Unmuted', "You'll now receive notifications for this location again!");
       
       console.log(`🔔 Pin ${pinIdNum} unmuted`);
     } catch (e) {
       console.error('Unmute failed:', e);
-      Alert.alert('Error', 'Failed to unmute pin. Please try again.');
+      showInfo('Error', 'Failed to unmute pin. Please try again.');
     }
   };
 
@@ -776,6 +1178,19 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
+      {/* Community-only filter banner — visible whenever the map is filtered to community pins only */}
+      {communityFilterActive && (
+        <TouchableOpacity
+          style={styles.communityFilterBanner}
+          onPress={turnOffCommunityFilter}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.communityFilterBannerText}>
+            ★ {t('radar.communityFilterActive')}  ·  {t('radar.communityFilterTapOff')}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {/* LocationIQ Place Search Overlay */}
       {searchBarOpen && (
         <View style={styles.searchOverlay}>
@@ -820,6 +1235,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             compassHeading={heading}
             exploredCircles={exploredCircles}
             flyToLocation={flyToLocation}
+            resetRotationToken={resetMapToken}
           />
         )}
 
@@ -855,16 +1271,32 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       </View>
 
       {/* Bottom Sheet for Selected Pin */}
-      <BottomSheet
-        pin={selectedPin}
-        userLocation={location}
-        heading={heading}
-        onClose={() => setSelectedPin(null)}
-        onLike={handleLike}
-        onDislike={handleDislike}
-        onReport={handleReport}
-        onDelete={handleDelete}
-      />
+      {selectedPin?.is_community ? (
+        <CommunityHubSheet
+          pin={selectedPin}
+          zonePins={zonePins}
+          userLocation={location}
+          heading={heading}
+          onClose={() => setSelectedPin(null)}
+          onLike={handleLike}
+          onDislike={handleDislike}
+          onReport={handleReport}
+          onDelete={handleDelete}
+          userInteraction={pinInteractions[selectedPin?.id ?? 0] ?? null}
+        />
+      ) : (
+        <BottomSheet
+          pin={selectedPin}
+          userLocation={location}
+          heading={heading}
+          onClose={() => setSelectedPin(null)}
+          onLike={handleLike}
+          onDislike={handleDislike}
+          onReport={handleReport}
+          onDelete={handleDelete}
+          userInteraction={selectedPin ? (pinInteractions[selectedPin.id] ?? null) : null}
+        />
+      )}
 
       {/* Cluster Bottom Sheet — slides up with a list of all pins in the tapped cluster */}
       <Modal
@@ -877,7 +1309,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           <View style={styles.clusterSheet}>
             <View style={styles.bottomSheetHandle} />
             <View style={styles.clusterHeader}>
-              <Text style={styles.clusterTitle}>{clusterPins.length} messages here</Text>
+              <Text style={styles.clusterTitle}>{clusterPins.length} {t('radar.clusterMessages')}</Text>
               <TouchableOpacity onPress={() => setClusterVisible(false)} style={styles.bottomSheetClose}>
                 <Text style={styles.bottomSheetCloseText}>✕</Text>
               </TouchableOpacity>
@@ -900,6 +1332,17 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         </View>
       </Modal>
 
+      {/* Drop Pin FAB — bottom-center, visible while exploring */}
+      {!selectedPin && (
+        <TouchableOpacity
+          style={styles.dropFab}
+          onPress={() => navigation.navigate('Drop')}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.dropFabIcon}>📍</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Start Button (if not tracking) */}
       {!isSearching && (
         <TouchableOpacity
@@ -909,6 +1352,16 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           <Text style={styles.startButtonText}>🚀 {t('radar.startExploring') || 'Start Exploring'}</Text>
         </TouchableOpacity>
       )}
+      <SimpleConfirmDialog
+        visible={dialog.visible}
+        title={dialog.title}
+        message={dialog.message}
+        confirmText={dialog.confirmText}
+        cancelText={dialog.cancelText}
+        isDangerous={dialog.isDangerous}
+        onConfirm={handleDialogConfirm}
+        onCancel={dismissDialog}
+      />
     </SafeAreaView>
   );
 };
@@ -1048,15 +1501,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     paddingTop: 8,
-    maxHeight: height * 0.6,
+    maxHeight: height * 0.65,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 10,
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 12,
     zIndex: 15,
   },
   bottomSheetHandle: {
@@ -1071,10 +1524,38 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
+    borderBottomColor: '#F0F0F0',
+  },
+  bsHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  communityBadge: {
+    backgroundColor: '#EDE7F6',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  communityBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6A1B9A',
+  },
+  distanceChip: {
+    backgroundColor: '#E8F5E9',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  distanceChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2E7D32',
   },
   bottomSheetDistance: {
     flexDirection: 'row',
@@ -1096,103 +1577,127 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F3F4',
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: 8,
   },
   bottomSheetCloseText: {
-    fontSize: 20,
+    fontSize: 16,
     color: '#5F6368',
+    fontWeight: '600',
   },
   navigationBar: {
     backgroundColor: '#E8F5E9',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
   },
   navigationText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#1B5E20',
     textAlign: 'center',
   },
   bottomSheetContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    flex: 1,
+  },
+  bottomSheetContentContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
   },
   bottomSheetMessage: {
     fontSize: 16,
     color: '#202124',
     lineHeight: 24,
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  bottomSheetStats: {
+  // 2x2 stats grid
+  statsGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 16,
-    gap: 16,
   },
-  statItem: {
+  statChip: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    width: '48%',
   },
-  statIcon: {
-    fontSize: 16,
+  statChipIcon: {
+    fontSize: 14,
     marginRight: 6,
   },
-  statText: {
-    fontSize: 13,
+  statChipText: {
+    fontSize: 12,
     color: '#5F6368',
+    fontWeight: '500',
+    flexShrink: 1,
   },
-  bottomSheetActions: {
+  // kept for backward compat but unused:
+  bottomSheetStats: { flexDirection: 'row', marginBottom: 16 },
+  statItem: { flexDirection: 'row', alignItems: 'center' },
+  statIcon: { fontSize: 16, marginRight: 6 },
+  statText: { fontSize: 13, color: '#5F6368' },
+  bottomSheetActions: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  actionsRow: {
     flexDirection: 'row',
-    gap: 12,
-    paddingBottom: 20,
+    gap: 10,
+    marginBottom: 10,
   },
   likeButton: {
     flex: 1,
-    backgroundColor: '#87CEEB', // Sky blue (discovery theme)
-    paddingVertical: 14,
-    borderRadius: 8,
+    backgroundColor: '#4CAF50',
+    paddingVertical: 13,
+    borderRadius: 10,
     alignItems: 'center',
   },
   likeButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
   },
   dislikeButton: {
     flex: 1,
     backgroundColor: '#FFE4E1',
-    paddingVertical: 14,
-    borderRadius: 8,
+    paddingVertical: 13,
+    borderRadius: 10,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
   },
   dislikeButtonText: {
-    color: '#DC143C',
-    fontSize: 15,
-    fontWeight: '600',
+    color: '#C62828',
+    fontSize: 14,
+    fontWeight: '700',
   },
   reportButton: {
-    flex: 1,
-    backgroundColor: '#FF6B6B', // Red for safety reports
-    paddingVertical: 14,
-    borderRadius: 8,
+    backgroundColor: '#FFF3E0',
+    paddingVertical: 13,
+    borderRadius: 10,
     alignItems: 'center',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#FFE0B2',
   },
   reportButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
+    color: '#E65100',
+    fontSize: 14,
+    fontWeight: '700',
   },
   deleteButton: {
     backgroundColor: '#D32F2F',
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingVertical: 13,
+    borderRadius: 10,
     alignItems: 'center',
-    marginTop: 8,
+    marginBottom: 4,
   },
   deleteButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 
   // Start Button
@@ -1216,6 +1721,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+
+  // Drop Pin FAB
+  dropFab: {
+    position: 'absolute',
+    bottom: 32,
+    alignSelf: 'center',
+    left: '50%',
+    marginLeft: -28,
+    width: 56,
+    height: 56,
+    backgroundColor: MiyabiColors.mikan,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: MiyabiColors.mikanDark,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 8,
+    zIndex: 12,
+  },
+  dropFabIcon: {
+    fontSize: 26,
+  },
+  dropFabLabel: {
+    display: 'none',
   },
 
   // Cluster bottom sheet
@@ -1331,6 +1863,242 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     paddingVertical: 10,
+  },
+
+  // ─── Community Hub Sheet ──────────────────────────────────────────────────
+  communityPulse: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  pulseLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 6 },
+  pulseIcon: { fontSize: 18 },
+  pulseText: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', flex: 1 },
+  pulseDot: { width: 8, height: 8, borderRadius: 4, marginRight: 4 },
+  pulseStatus: { fontSize: 11, fontWeight: '700' },
+
+  communityTabBar: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    marginHorizontal: 16,
+    marginBottom: 4,
+  },
+  communityTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  communityTabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9E9E9E',
+  },
+
+  checkInButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  checkInButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  boardSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 8,
+  },
+  boardCard: {
+    backgroundColor: '#F5F0FF',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+  },
+  boardCardContent: {
+    fontSize: 13,
+    color: '#1A1A1A',
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  boardCardMeta: {
+    fontSize: 11,
+    color: '#6D4C7E',
+  },
+
+  chatLockNote: {
+    backgroundColor: '#F3F3F3',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+  },
+  chatLockText: {
+    fontSize: 12,
+    color: '#9E9E9E',
+    textAlign: 'center',
+  },
+  chatLog: {
+    backgroundColor: '#F5F0FF',
+    borderRadius: 10,
+    padding: 10,
+    maxHeight: 120,
+    marginBottom: 8,
+  },
+  chatEmptyText: {
+    fontSize: 12,
+    color: '#9E9E9E',
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  chatBubble: {
+    backgroundColor: '#EDE7F6',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 4,
+    alignSelf: 'flex-start',
+    maxWidth: '80%',
+  },
+  chatBubbleText: {
+    fontSize: 13,
+    color: '#1A1A1A',
+  },
+  chatInputRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  chatInput: {
+    flex: 1,
+    height: 40,
+    backgroundColor: '#EDE7F6',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    fontSize: 13,
+    color: '#1A1A1A',
+  },
+  chatSendBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatSendBtnText: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3E5F5',
+  },
+  memberAvatarWrap: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  memberAvatarLayer: {
+    position: 'absolute',
+    width: 20,
+    height: 32,
+    borderRadius: 4,
+    opacity: 0.75,
+  },
+  memberAvatarLabel: {
+    position: 'absolute',
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  memberPreview: {
+    fontSize: 13,
+    color: '#1A1A1A',
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  memberMeta: {
+    fontSize: 11,
+    color: '#9C27B0',
+    fontWeight: '600',
+  },
+  memberAnonNote: {
+    fontSize: 11,
+    color: '#9E9E9E',
+    marginBottom: 12,
+    fontStyle: 'italic',
+  },
+
+  emptyMembersCard: {
+    padding: 24,
+    alignItems: 'center',
+  },
+  emptyMembersText: {
+    fontSize: 13,
+    color: '#9E9E9E',
+  },
+
+  checkInBanner: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 12,
+  },
+  checkInBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  checkInBannerSub: {
+    fontSize: 12,
+    color: '#6D4C7E',
+    lineHeight: 18,
+  },
+  checkInActiveBadge: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    alignSelf: 'flex-start',
+    marginTop: 8,
+  },
+  checkInActiveBadgeText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // Community-only filter active banner (shown on top of the map)
+  communityFilterBanner: {
+    position: 'absolute',
+    top: 94,
+    left: 24,
+    right: 24,
+    backgroundColor: '#6A1B9A',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    zIndex: 101,
+    alignItems: 'center',
+    ...MiyabiShadows.md,
+  },
+  communityFilterBannerText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });
 

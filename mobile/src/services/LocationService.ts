@@ -58,6 +58,10 @@ class LocationService {
   // Pins the user has interacted with (opened bottom sheet, liked, etc.) so we skip pass-by
   private interactedPinIds: Set<number> = new Set();
 
+  /**
+   * Expose the most recently received GPS position.
+   * Drop screen uses this for an instant lock when tracking is already running.
+   */
   /** Call this from RadarScreen when the user opens/likes/dislikes/reports a pin */
   markPinInteracted(pinId: number): void {
     this.interactedPinIds.add(pinId);
@@ -188,22 +192,85 @@ class LocationService {
   }
 
   /**
-   * Get current location once
+   * Get current location once.
+   *
+   * Strategy (fastest-first):
+   *  0. Return the live-tracking position immediately if RadarScreen tracking is running.
+   *  1. Return last-known position if fresh enough (≤ 30 s old, ≤ 100 m accuracy).
+   *  2. Race getCurrentPositionAsync (Balanced accuracy) against a 6-second timeout.
+   *     If GPS wins → great.  If timeout fires → return last-known (even if slightly stale).
+   *  3. IP-based city-level fallback as last resort.
+   *
+   * This prevents the "Waiting for GPS" spinner from hanging indefinitely on the Drop screen.
    */
   async getCurrentLocation(): Promise<LocationCoords | null> {
     try {
       const hasPermission = await this.requestPermissions();
       if (!hasPermission) return null;
 
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+      // ── Step 0: Live tracking position (instant, most accurate) ─────────────
+      // If the Radar screen is already tracking, lastLocation is updated every
+      // 2 seconds. Use it immediately rather than waiting for a new GPS fix.
+      if (this.lastLocation) {
+        console.log('📍 Using live tracking position (instant)');
+        return this.lastLocation;
+      }
 
-      return {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        accuracy: location.coords.accuracy,
-      };
+      // ── Step 1: Try last-known (instant, no satellite wait) ──────────────────
+      try {
+        const last = await Location.getLastKnownPositionAsync({
+          maxAge: 30_000,          // accept if measured within the last 30 s
+          requiredAccuracy: 100,   // must be ≤ 100 m
+        });
+        if (last) {
+          console.log('📍 Using last-known location (instant)');
+          return {
+            latitude: last.coords.latitude,
+            longitude: last.coords.longitude,
+            accuracy: last.coords.accuracy,
+          };
+        }
+      } catch (_) { /* last-known unavailable on this device/OS — continue */ }
+
+      // ── Step 2: Race GPS vs. 6-second timeout ────────────────────────────────
+      const gpsPromise = Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced, // faster than High; ~10-30 m accuracy
+      });
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 6_000)
+      );
+
+      const result = await Promise.race([gpsPromise, timeoutPromise]);
+
+      if (result) {
+        return {
+          latitude: result.coords.latitude,
+          longitude: result.coords.longitude,
+          accuracy: result.coords.accuracy,
+        };
+      }
+
+      // ── Step 3: GPS timed out — try last-known without freshness constraints ──
+      console.warn('⚠️ GPS timeout — using stale last-known position');
+      try {
+        const stale = await Location.getLastKnownPositionAsync({});
+        if (stale) {
+          return {
+            latitude: stale.coords.latitude,
+            longitude: stale.coords.longitude,
+            accuracy: stale.coords.accuracy,
+          };
+        }
+      } catch (_) {}
+
+      // ── Step 4: IP fallback (city-level) ─────────────────────────────────────
+      try {
+        const ipLoc = await this.getIpLocation();
+        if (ipLoc) return ipLoc;
+      } catch (e) {
+        console.error('IP fallback failed:', e);
+      }
+      return null;
     } catch (error) {
       console.error('Error getting current location:', error);
       // Try an IP-based fallback (approximate, good for initial map centering)

@@ -142,9 +142,20 @@ class AuthService {
       if (!client) return null;
 
       // Check for existing session
-      const { data: { session } } = await client.auth.getSession();
-      
-      if (session?.user) {
+      const { data: { session }, error: sessionError } = await client.auth.getSession();
+
+      // Handle stale / already-used refresh token — clear the bad session so
+      // the next call creates a fresh anonymous session instead of looping.
+      if (sessionError) {
+        const msg = sessionError.message || '';
+        if (msg.toLowerCase().includes('refresh token') || msg.toLowerCase().includes('already used')) {
+          console.log('🔄 Stale refresh token detected — clearing session and re-authenticating...');
+          await client.auth.signOut();
+        } else {
+          console.error('❌ Supabase getSession error:', sessionError.message);
+          return null;
+        }
+      } else if (session?.user) {
         console.log('🔐 Supabase session restored:', session.user.id.substring(0, 8) + '...');
         return {
           id: session.user.id,
@@ -153,7 +164,7 @@ class AuthService {
         };
       }
 
-      // No session - sign in anonymously
+      // No valid session - sign in anonymously
       const { data, error } = await client.auth.signInAnonymously();
       
       if (error) {

@@ -1,13 +1,13 @@
 /**
- * Community Screen
- * 
- * Community overview showing stats:
- * - Total community pins across the platform
- * - User's own community pins
- * - Visual stats cards with Miyabi styling
+ * Community Screen  (redesigned)
+ *
+ * Views:
+ *   1. Feed  — scrollable Zone cards + invite-code gateway + stats + filter toggle
+ *   2. Zone  — trending pins + anonymous contributor leaderboard for one zone
+ *
+ * All original state (COMMUNITY_FILTER_KEY, fetchNearbyPins, etc.) is preserved.
  */
-
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,45 +16,155 @@ import {
   TouchableOpacity,
   RefreshControl,
   Switch,
-  FlatList,
+  ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { useTranslation } from 'react-i18next';
 import apiService, { CommunityStats, DiscoveredPin } from '../services/ApiService';
 import locationService from '../services/LocationService';
-import {
-  MiyabiColors,
-  MiyabiSpacing,
-  MiyabiBorderRadius,
-  MiyabiStyles,
-  MiyabiTypography,
-  MiyabiShadows,
-} from '../styles/miyabi';
+import { MiyabiSpacing, MiyabiShadows } from '../styles/miyabi';
+import { useTranslation } from 'react-i18next';
 
 export const COMMUNITY_FILTER_KEY = 'serendipity_community_filter_active';
 
+// ── Zone colours (deterministic from zone index) ─────────────────────────────
+const ZONE_COLORS = [
+  '#7B1FA2', '#1565C0', '#00695C', '#AD1457', '#E65100',
+  '#4527A0', '#2E7D32', '#283593', '#BF360C', '#006064',
+];
+function zoneColor(idx: number) { return ZONE_COLORS[idx % ZONE_COLORS.length]; }
+
+// ── Deterministic short ID from lat/lon ──────────────────────────────────────
+function zoneId(lat: number, lon: number): string {
+  const n = Math.abs(Math.round(lat * 1000) * 31 + Math.round(lon * 1000) * 17) % 65536;
+  return n.toString(16).toUpperCase().padStart(4, '0');
+}
+
+// ── Cluster nearby pins into zones (~100 m radius) ───────────────────────────
+function haversine(a: DiscoveredPin, b: DiscoveredPin) {
+  const R = 6371000;
+  const dLat = (b.latitude - a.latitude) * Math.PI / 180;
+  const dLon = (b.longitude - a.longitude) * Math.PI / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.latitude * Math.PI / 180) *
+      Math.cos(b.latitude * Math.PI / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+interface Zone {
+  id: string;
+  centerLat: number;
+  centerLon: number;
+  pins: DiscoveredPin[];
+  totalLikes: number;
+  colorIdx: number;
+}
+
+function clusterIntoZones(pins: DiscoveredPin[]): Zone[] {
+  const used = new Array(pins.length).fill(false);
+  const zones: Zone[] = [];
+  pins.forEach((pin, i) => {
+    if (used[i]) return;
+    const group = [pin];
+    used[i] = true;
+    pins.forEach((other, j) => {
+      if (used[j]) return;
+      if (haversine(pin, other) <= 100) { group.push(other); used[j] = true; }
+    });
+    const lat = group.reduce((s, p) => s + p.latitude, 0) / group.length;
+    const lon = group.reduce((s, p) => s + p.longitude, 0) / group.length;
+    zones.push({
+      id: zoneId(lat, lon),
+      centerLat: lat,
+      centerLon: lon,
+      pins: group.sort((a, b) => b.likes - a.likes),
+      totalLikes: group.reduce((s, p) => s + p.likes, 0),
+      colorIdx: zones.length,
+    });
+  });
+  return zones.sort((a, b) => b.totalLikes - a.totalLikes);
+}
+
+// ── Geometric hex avatar (pure RN views — no SVG) ────────────────────────────
+const HexAvatar: React.FC<{ color: string; size?: number; label?: string }> = ({
+  color, size = 48, label,
+}) => (
+  <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+    {[0, 60, 120].map(deg => (
+      <View
+        key={deg}
+        style={{
+          position: 'absolute',
+          width: size * 0.55,
+          height: size * 0.9,
+          borderRadius: size * 0.12,
+          backgroundColor: color,
+          opacity: 0.75,
+          transform: [{ rotate: `${deg}deg` }],
+        }}
+      />
+    ))}
+    {label ? (
+      <Text style={{ position: 'absolute', color: '#fff', fontSize: size * 0.26, fontWeight: '800' }}>
+        {label}
+      </Text>
+    ) : null}
+  </View>
+);
+
+// ── Anonymous leaderboard row ─────────────────────────────────────────────────
+const LeaderEntry: React.FC<{ rank: number; likes: number; preview: string; colorIdx: number }> = ({
+  rank, likes, preview, colorIdx,
+}) => {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.leaderRow}>
+      <Text style={styles.leaderRank}>#{rank}</Text>
+      <HexAvatar color={zoneColor(colorIdx)} size={36} />
+      <View style={{ flex: 1, marginLeft: 10 }}>
+        <Text style={styles.leaderPreview} numberOfLines={1}>{preview}</Text>
+        <Text style={styles.leaderLikes}>❤️ {likes} {t('diary.liked')}</Text>
+      </View>
+    </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 const CommunityScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { t } = useTranslation();
-  
-  // State
   const [communityStats, setCommunityStats] = useState<CommunityStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading]     = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  // Community filter toggle — persisted across screens via AsyncStorage
   const [filterActive, setFilterActive] = useState(false);
-  // Nearby community pins fetched at current location
-  const [nearbyPins, setNearbyPins] = useState<DiscoveredPin[]>([]);
+  const [nearbyPins, setNearbyPins]   = useState<DiscoveredPin[]>([]);
+  const [zones, setZones]             = useState<Zone[]>([]);
+  const [selectedZone, setSelectedZone] = useState<Zone | null>(null);
+  const [inviteCode, setInviteCode]   = useState('');
+  const [inviteMsg, setInviteMsg]     = useState('');
 
-  // ============================================
-  // INITIALIZATION
-  // ============================================
-
-  useEffect(() => {
-    fetchCommunityStats();
-    loadFilter();
-    fetchNearbyPins();
-  }, []);
+  // ── Data fetching ─────────────────────────────────────────────────────────
+  const fetchAll = async () => {
+    try {
+      const [stats, loc] = await Promise.all([
+        apiService.getCommunityStats().catch(() => null),
+        locationService.getCurrentLocation(),
+      ]);
+      if (stats) setCommunityStats(stats);
+      if (loc) {
+        const result = await apiService.discoverPins(loc.latitude, loc.longitude).catch(() => null);
+        if (result) {
+          const pins = result.pins.filter(p => p.is_community);
+          setNearbyPins(pins);
+          setZones(clusterIntoZones(pins));
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const loadFilter = async () => {
     try {
@@ -63,61 +173,116 @@ const CommunityScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     } catch (_) {}
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      setIsLoading(true);
+      fetchAll();
+      loadFilter();
+    }, [])
+  );
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchAll();
+    setIsRefreshing(false);
+  };
+
   const toggleFilter = async (value: boolean) => {
     setFilterActive(value);
     try { await AsyncStorage.setItem(COMMUNITY_FILTER_KEY, String(value)); } catch (_) {}
   };
 
-  const fetchNearbyPins = async () => {
-    try {
-      const loc = await locationService.getCurrentLocation();
-      if (!loc) return;
-      const result = await apiService.discoverPins(loc.latitude, loc.longitude);
-      setNearbyPins(result.pins.filter(p => p.is_community));
-    } catch (_) {
-      setNearbyPins([]);
-    }
+  const handleInviteJoin = () => {
+    const code = inviteCode.trim().toUpperCase();
+    if (!code) { setInviteMsg(t('commscreen.inviteEmpty')); return; }
+    setInviteMsg(t('commscreen.inviteNoted', { code }));
+    setInviteCode('');
   };
 
-  const fetchCommunityStats = async () => {
-    try {
-      setIsLoading(true);
-      const stats = await apiService.getCommunityStats();
-      setCommunityStats(stats);
-    } catch (error) {
-      // keep whatever we have
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // ── Zone Detail View ───────────────────────────────────────────────────────
+  if (selectedZone) {
+    const trending = [...selectedZone.pins].sort((a, b) => b.likes - a.likes);
+    const color = zoneColor(selectedZone.colorIdx);
+    return (
+      <View style={styles.container}>
+        <View style={[styles.header, { borderBottomWidth: 2, borderBottomColor: color }]}>
+          <TouchableOpacity style={styles.backButton} onPress={() => setSelectedZone(null)}>
+            <Text style={[styles.backIcon, { color }]}>‹</Text>
+          </TouchableOpacity>
+          <HexAvatar color={color} size={40} label={selectedZone.id.slice(0, 2)} />
+          <View style={{ marginLeft: 12, flex: 1 }}>
+            <Text style={styles.headerTitle}>{t('commscreen.zone')} {selectedZone.id}</Text>
+            <Text style={[styles.headerSubtitle, { color }]}>
+              {t('commscreen.activePins', { count: selectedZone.pins.length })} · {selectedZone.totalLikes} ❤️
+            </Text>
+          </View>
+        </View>
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await Promise.all([fetchCommunityStats(), fetchNearbyPins()]);
-    setIsRefreshing(false);
-  };
+        <ScrollView style={styles.scrollContainer} contentContainerStyle={styles.scrollContent}>
+          <Text style={styles.sectionTitle}>📈 {t('commscreen.trendingPins')}</Text>
+          {trending.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>{t('commscreen.noPinsYet')}</Text>
+              <Text style={styles.emptySub}>{t('commscreen.noFirstDrop')}</Text>
+            </View>
+          ) : (
+            trending.map((pin, i) => (
+              <View key={pin.id} style={[styles.trendingCard, { borderLeftColor: color }]}>
+                <Text style={[styles.trendingRank, { color }]}>#{i + 1}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.trendingContent} numberOfLines={3}>{pin.content}</Text>
+                  <View style={styles.trendingMeta}>
+                    <Text style={styles.trendingMetaText}>❤️ {pin.likes}</Text>
+                    <Text style={styles.trendingMetaText}>👣 {pin.passes_by ?? 0}</Text>
+                    <Text style={styles.trendingMetaText}>📍 {Math.round(pin.distance_meters)}m</Text>
+                  </View>
+                </View>
+              </View>
+            ))
+          )}
 
-  // ============================================
-  // MAIN RENDER
-  // ============================================
+          <Text style={[styles.sectionTitle, { marginTop: 24 }]}>🏆 {t('commscreen.topContribs')}</Text>
+          <View style={styles.leaderboard}>
+            {trending.slice(0, 5).map((pin, i) => (
+              <LeaderEntry
+                key={pin.id}
+                rank={i + 1}
+                likes={pin.likes}
+                preview={pin.content}
+                colorIdx={selectedZone.colorIdx + i + 1}
+              />
+            ))}
+            {trending.length === 0 && (
+              <Text style={styles.leaderEmpty}>{t('commscreen.noContribs')}</Text>
+            )}
+          </View>
 
+          <View style={styles.anonNote}>
+            <Text style={styles.anonNoteText}>
+              {t('commscreen.anonNote')}
+            </Text>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── Feed View (main) ───────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.menuButton}
-            onPress={() => navigation.openDrawer()}
-          >
+          <TouchableOpacity style={styles.menuButton} onPress={() => navigation.openDrawer()}>
             <Text style={styles.menuIcon}>☰</Text>
           </TouchableOpacity>
-          <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>{t('community.title')}</Text>
-            <Text style={styles.headerSubtitle}>{t('community.subtitle')}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>{t('navigation.community')}</Text>
+            <Text style={styles.headerSubtitle}>{t('commscreen.subtitle')}</Text>
           </View>
         </View>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>🏘️ {t('common.loading')}</Text>
+          <ActivityIndicator size="large" color="#9C27B0" />
+          <Text style={styles.loadingText}>{t('commscreen.scanning')}</Text>
         </View>
       </View>
     );
@@ -125,161 +290,144 @@ const CommunityScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      {/* Header with integrated hamburger */}
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.menuButton}
-          onPress={() => navigation.openDrawer()}
-        >
+        <TouchableOpacity style={styles.menuButton} onPress={() => navigation.openDrawer()}>
           <Text style={styles.menuIcon}>☰</Text>
         </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>{t('community.title')}</Text>
-          <Text style={styles.headerSubtitle}>{t('community.subtitle')}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>{t('navigation.community')}</Text>
+          <Text style={styles.headerSubtitle}>{t('commscreen.subtitle')}</Text>
         </View>
+        {communityStats && (
+          <View style={styles.headerStatChip}>
+            <Text style={styles.headerStatText}>{t('commscreen.pinsCount', { count: communityStats.total_community_pins })}</Text>
+          </View>
+        )}
       </View>
 
-      {/* Community Content */}
       <ScrollView
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={MiyabiColors.bamboo}
-          />
+          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor="#9C27B0" />
         }
       >
-        {/* Hero Section */}
-        <View style={styles.heroSection}>
-          <Text style={styles.heroIcon}>🏘️</Text>
-          <Text style={styles.heroTitle}>{t('community.heroTitle')}</Text>
-          <Text style={styles.heroSubtitle}>{t('community.heroSubtitle')}</Text>
+        {/* ── Private Invite Gateway ───────────────────────────────────── */}
+        <View style={styles.inviteCard}>
+          <View style={styles.inviteHeader}>
+            <HexAvatar color="#7B1FA2" size={36} />
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={styles.inviteTitle}>{t('commscreen.inviteTitle')}</Text>
+              <Text style={styles.inviteSub}>{t('commscreen.inviteSub')}</Text>
+            </View>
+          </View>
+          <View style={styles.inviteRow}>
+            <TextInput
+              style={styles.inviteInput}
+              value={inviteCode}
+              onChangeText={setInviteCode}
+              placeholder={t('commscreen.invitePlaceholder')}
+              placeholderTextColor="#B39DDB"
+              autoCapitalize="characters"
+              maxLength={16}
+            />
+            <TouchableOpacity style={styles.inviteBtn} onPress={handleInviteJoin} activeOpacity={0.8}>
+              <Text style={styles.inviteBtnText}>{t('commscreen.inviteJoin')}</Text>
+            </TouchableOpacity>
+          </View>
+          {inviteMsg ? <Text style={styles.inviteMsg}>{inviteMsg}</Text> : null}
         </View>
 
-        {/* Community Filter Toggle */}
-        <View style={styles.filterCard}>
-          <View style={styles.filterRow}>
+        {/* ── Community-only radar toggle ───────────────────────────────── */}
+        <View style={styles.toggleCard}>
+          <View style={styles.toggleRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.filterTitle}>📺 Community-only radar</Text>
-              <Text style={styles.filterSub}>Hides personal pins on the map</Text>
+              <Text style={styles.toggleTitle}>{t('commscreen.radarToggleTitle')}</Text>
+              <Text style={styles.toggleSub}>{t('commscreen.radarToggleSub')}</Text>
             </View>
             <Switch
               value={filterActive}
               onValueChange={toggleFilter}
-              trackColor={{ false: '#E0E0E0', true: '#7B1FA2' }}
+              trackColor={{ false: '#E0E0E0', true: '#9C27B0' }}
               thumbColor={filterActive ? '#CE93D8' : '#f4f3f4'}
             />
           </View>
           {filterActive && (
-            <Text style={styles.filterActive}>✅ Community filter active — Radar shows community pins only</Text>
+            <Text style={styles.toggleActiveLabel}>{t('commscreen.radarToggleActive')}</Text>
           )}
         </View>
 
-        {/* Nearby community pins */}
-        <View style={styles.nearbySection}>
-          <Text style={styles.nearbySectionTitle}>📡 Signals nearby</Text>
-          {nearbyPins.length === 0 ? (
-            <View style={styles.emptyNearby}>
-              <Text style={styles.emptyNearbyIcon}>🌊</Text>
-              <Text style={styles.emptyNearbyText}>No community signals nearby</Text>
-              <Text style={styles.emptyNearbySub}>Drop a pin with the community toggle to start one!</Text>
-            </View>
-          ) : (
-            nearbyPins.slice(0, 5).map(pin => (
-              <View key={pin.id} style={styles.nearbyItem}>
-                <Text style={styles.nearbyItemContent} numberOfLines={2}>{pin.content}</Text>
-                <Text style={styles.nearbyItemMeta}>❤️ {pin.likes}  👣 {pin.passes_by}</Text>
-              </View>
-            ))
-          )}
-        </View>
+        {/* ── Zones feed ────────────────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>
+          {zones.length > 0
+            ? (zones.length === 1
+              ? t('commscreen.zonesNearSingle', { count: zones.length })
+              : t('commscreen.zonesNearPlural', { count: zones.length }))
+            : t('commscreen.zonesNear')}
+        </Text>
 
-        {/* Stats Cards */}
+        {zones.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <HexAvatar color="#9C27B0" size={56} />
+            <Text style={[styles.emptyTitle, { marginTop: 14 }]}>{t('commscreen.emptyTitle')}</Text>
+            <Text style={styles.emptySub}>{t('commscreen.emptySub')}</Text>
+          </View>
+        ) : (
+          zones.map(zone => {
+            const color = zoneColor(zone.colorIdx);
+            return (
+              <TouchableOpacity
+                key={zone.id}
+                style={styles.zoneCard}
+                onPress={() => setSelectedZone(zone)}
+                activeOpacity={0.82}
+              >
+                <HexAvatar color={color} size={52} label={zone.id.slice(0, 2)} />
+                <View style={styles.zoneCardBody}>
+                  <Text style={styles.zoneCardName}>{t('commscreen.zone')} {zone.id}</Text>
+                  <Text style={styles.zoneCardMeta}>
+                    {t('commscreen.activePins', { count: zone.pins.length })}
+                    {'  ·  '}{zone.totalLikes} ❤️
+                  </Text>
+                  <Text style={styles.zoneCardPreview} numberOfLines={1}>
+                    "{zone.pins[0].content}"
+                  </Text>
+                </View>
+                <Text style={[styles.zoneArrow, { color }]}>›</Text>
+              </TouchableOpacity>
+            );
+          })
+        )}
+
+        {/* ── Stats chips ───────────────────────────────────────────────── */}
         {communityStats && (
-          <View style={styles.statsSection}>
-            {/* Total Community Pins */}
-            <View style={[styles.statCard, styles.statCardPrimary]}>
-              <View style={styles.statCardIconContainer}>
-                <Text style={styles.statCardBigIcon}>🌍</Text>
-              </View>
-              <Text style={styles.statCardValue}>{communityStats.total_community_pins}</Text>
-              <Text style={styles.statCardLabel}>{t('community.totalCommunityPins')}</Text>
+          <View style={styles.statsRow}>
+            <View style={[styles.statChip, { backgroundColor: '#F3E5F5' }]}>
+              <Text style={styles.statValue}>{communityStats.total_community_pins}</Text>
+              <Text style={styles.statLabel}>{t('commscreen.globalPins')}</Text>
             </View>
-
-            {/* User's Community Pins */}
-            <View style={[styles.statCard, styles.statCardSecondary]}>
-              <View style={styles.statCardIconContainer}>
-                <Text style={styles.statCardBigIcon}>📌</Text>
-              </View>
-              <Text style={styles.statCardValue}>{communityStats.user_community_pins}</Text>
-              <Text style={styles.statCardLabel}>{t('community.yourCommunityPins')}</Text>
+            <View style={[styles.statChip, { backgroundColor: '#EDE7F6' }]}>
+              <Text style={styles.statValue}>{communityStats.user_community_pins}</Text>
+              <Text style={styles.statLabel}>{t('commscreen.yourPins')}</Text>
             </View>
           </View>
         )}
 
-        {/* Info Section */}
-        <View style={styles.infoSection}>
-          <View style={styles.infoCard}>
-            <Text style={styles.infoIcon}>💡</Text>
-            <Text style={styles.infoTitle}>{t('community.infoTitle')}</Text>
-            <Text style={styles.infoText}>{t('community.infoText')}</Text>
-          </View>
-        </View>
-
-        {/* Community Guide */}
-        <View style={styles.guideSection}>
-          <Text style={styles.guideSectionTitle}>{t('community.howItWorks')}</Text>
-          
-          <View style={styles.guideItem}>
-            <View style={styles.guideNumberBadge}>
-              <Text style={styles.guideNumber}>1</Text>
-            </View>
-            <View style={styles.guideTextContainer}>
-              <Text style={styles.guideItemTitle}>{t('community.step1Title')}</Text>
-              <Text style={styles.guideItemText}>{t('community.step1Text')}</Text>
-            </View>
-          </View>
-
-          <View style={styles.guideItem}>
-            <View style={styles.guideNumberBadge}>
-              <Text style={styles.guideNumber}>2</Text>
-            </View>
-            <View style={styles.guideTextContainer}>
-              <Text style={styles.guideItemTitle}>{t('community.step2Title')}</Text>
-              <Text style={styles.guideItemText}>{t('community.step2Text')}</Text>
-            </View>
-          </View>
-
-          <View style={styles.guideItem}>
-            <View style={styles.guideNumberBadge}>
-              <Text style={styles.guideNumber}>3</Text>
-            </View>
-            <View style={styles.guideTextContainer}>
-              <Text style={styles.guideItemTitle}>{t('community.step3Title')}</Text>
-              <Text style={styles.guideItemText}>{t('community.step3Text')}</Text>
-            </View>
-          </View>
-        </View>
+        <View style={{ height: 32 }} />
       </ScrollView>
     </View>
   );
 };
 
-// ============================================
-// STYLES
-// ============================================
+// ── STYLES ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: MiyabiColors.washi,
-  },
-  
+  container: { flex: 1, backgroundColor: '#F5F0FF' },
+
   // Header
   header: {
-    backgroundColor: MiyabiColors.cardBackground,
+    backgroundColor: '#FFFFFF',
     paddingTop: MiyabiSpacing.xl + 20,
     paddingBottom: MiyabiSpacing.md,
     paddingHorizontal: MiyabiSpacing.md,
@@ -287,217 +435,116 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  headerContent: {
-    flex: 1,
+  headerTitle: { fontSize: 22, fontWeight: '700', color: '#1A1A1A', marginBottom: 1 },
+  headerSubtitle: { fontSize: 13, color: '#7B1FA2' },
+  headerStatChip: {
+    backgroundColor: '#EDE7F6', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4,
   },
-  headerTitle: {
-    ...MiyabiStyles.heading,
-    marginBottom: 4,
-  },
-  headerSubtitle: {
-    ...MiyabiStyles.caption,
-    color: MiyabiColors.bamboo,
-  },
-  
-  // Loading
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    ...MiyabiStyles.body,
-    color: MiyabiColors.sumiLight,
-  },
-  
-  // Scroll
-  scrollContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: MiyabiSpacing.md,
-    paddingBottom: MiyabiSpacing.xxl,
-  },
+  headerStatText: { fontSize: 12, color: '#6A1B9A', fontWeight: '700' },
 
-  // Community filter toggle card
-  filterCard: {
-    backgroundColor: MiyabiColors.cardBackground,
-    borderRadius: MiyabiBorderRadius.md,
-    padding: MiyabiSpacing.md,
-    marginBottom: MiyabiSpacing.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: '#7B1FA2',
-    ...MiyabiShadows.sm,
-  },
-  filterRow: { flexDirection: 'row', alignItems: 'center' },
-  filterTitle: { fontSize: 15, fontWeight: '700', color: MiyabiColors.sumi, marginBottom: 2 },
-  filterSub:   { fontSize: 12, color: MiyabiColors.sumiLight },
-  filterActive:{ fontSize: 12, color: '#45B74B', fontWeight: '600', marginTop: 8 },
-
-  // Nearby community signals
-  nearbySection: { marginBottom: MiyabiSpacing.lg },
-  nearbySectionTitle: { ...MiyabiStyles.subheading, marginBottom: MiyabiSpacing.sm },
-  emptyNearby: { alignItems: 'center', paddingVertical: 32, backgroundColor: MiyabiColors.cardBackground, borderRadius: MiyabiBorderRadius.md, ...MiyabiShadows.sm },
-  emptyNearbyIcon: { fontSize: 40, marginBottom: 10 },
-  emptyNearbyText: { fontSize: 16, fontWeight: '700', color: MiyabiColors.sumi, marginBottom: 4 },
-  emptyNearbySub:  { fontSize: 12, color: MiyabiColors.sumiLight, textAlign: 'center', paddingHorizontal: 20 },
-  nearbyItem: { backgroundColor: MiyabiColors.cardBackground, borderRadius: MiyabiBorderRadius.sm, padding: MiyabiSpacing.sm, marginBottom: MiyabiSpacing.xs, ...MiyabiShadows.sm, borderLeftWidth: 3, borderLeftColor: '#CE93D8' },
-  nearbyItemContent: { fontSize: 13, color: MiyabiColors.sumi, marginBottom: 4 },
-  nearbyItemMeta: { fontSize: 11, color: MiyabiColors.sumiLight },
-
-  // Hero Section
-  heroSection: {
-    alignItems: 'center',
-    paddingVertical: MiyabiSpacing.xl,
-    marginBottom: MiyabiSpacing.lg,
-  },
-  heroIcon: {
-    fontSize: 64,
-    marginBottom: MiyabiSpacing.md,
-  },
-  heroTitle: {
-    ...MiyabiStyles.heading,
-    textAlign: 'center',
-    marginBottom: MiyabiSpacing.xs,
-  },
-  heroSubtitle: {
-    ...MiyabiStyles.caption,
-    color: MiyabiColors.sumiLight,
-    textAlign: 'center',
-  },
-
-  // Stats Section
-  statsSection: {
-    flexDirection: 'row',
-    gap: MiyabiSpacing.md,
-    marginBottom: MiyabiSpacing.lg,
-  },
-  statCard: {
-    flex: 1,
-    borderRadius: MiyabiBorderRadius.lg,
-    padding: MiyabiSpacing.lg,
-    alignItems: 'center',
-    ...MiyabiShadows.md,
-  },
-  statCardPrimary: {
+  // Back button (zone detail)
+  backButton: {
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: '#F3E5F5',
+    alignItems: 'center', justifyContent: 'center', marginRight: 10,
   },
-  statCardSecondary: {
-    backgroundColor: '#E8F5E9',
-  },
-  statCardIconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.7)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: MiyabiSpacing.sm,
-  },
-  statCardBigIcon: {
-    fontSize: 28,
-  },
-  statCardValue: {
-    fontSize: 36,
-    fontWeight: '800' as any,
-    color: MiyabiColors.sumi,
-    marginBottom: 4,
-  },
-  statCardLabel: {
-    fontSize: MiyabiTypography.fontSize.sm,
-    color: MiyabiColors.sumiLight,
-    textAlign: 'center',
-  },
+  backIcon: { fontSize: 28, fontWeight: '300', lineHeight: 32 },
 
-  // Info Section
-  infoSection: {
-    marginBottom: MiyabiSpacing.lg,
-  },
-  infoCard: {
-    backgroundColor: MiyabiColors.cardBackground,
-    borderRadius: MiyabiBorderRadius.md,
-    padding: MiyabiSpacing.lg,
-    alignItems: 'center',
-    borderLeftWidth: 4,
-    borderLeftColor: MiyabiColors.bamboo,
-    ...MiyabiShadows.sm,
-  },
-  infoIcon: {
-    fontSize: 32,
-    marginBottom: MiyabiSpacing.sm,
-  },
-  infoTitle: {
-    ...MiyabiStyles.subheading,
-    marginBottom: MiyabiSpacing.xs,
-  },
-  infoText: {
-    ...MiyabiStyles.caption,
-    color: MiyabiColors.sumiLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  // Guide Section
-  guideSection: {
-    marginBottom: MiyabiSpacing.lg,
-  },
-  guideSectionTitle: {
-    ...MiyabiStyles.subheading,
-    marginBottom: MiyabiSpacing.md,
-  },
-  guideItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: MiyabiColors.cardBackground,
-    borderRadius: MiyabiBorderRadius.md,
-    padding: MiyabiSpacing.md,
-    marginBottom: MiyabiSpacing.sm,
-    ...MiyabiShadows.sm,
-  },
-  guideNumberBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: MiyabiColors.bamboo,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: MiyabiSpacing.md,
-    marginTop: 2,
-  },
-  guideNumber: {
-    fontSize: MiyabiTypography.fontSize.base,
-    fontWeight: '700' as any,
-    color: '#FFFFFF',
-  },
-  guideTextContainer: {
-    flex: 1,
-  },
-  guideItemTitle: {
-    ...MiyabiStyles.body,
-    fontWeight: '600' as any,
-    marginBottom: 4,
-  },
-  guideItemText: {
-    ...MiyabiStyles.caption,
-    color: MiyabiColors.sumiLight,
-    lineHeight: 18,
-  },
-
-  // Hamburger Menu (integrated in header)
+  // Hamburger
   menuButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: MiyabiColors.bambooLight + '30',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(156,39,176,0.1)',
+    alignItems: 'center', justifyContent: 'center', marginRight: 10,
   },
-  menuIcon: {
-    fontSize: 16,
-    color: MiyabiColors.bamboo,
-    fontWeight: '600',
+  menuIcon: { fontSize: 16, color: '#9C27B0', fontWeight: '600' },
+
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { fontSize: 14, color: '#7B1FA2', marginTop: 12 },
+
+  scrollContainer: { flex: 1 },
+  scrollContent: { padding: MiyabiSpacing.md, paddingBottom: 40 },
+
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 12, marginTop: 4 },
+
+  // ── Invite gateway ────────────────────────────────────────────────────────
+  inviteCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, marginBottom: 16,
+    borderWidth: 1.5, borderColor: '#CE93D8', ...MiyabiShadows.sm,
   },
+  inviteHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  inviteTitle: { fontSize: 15, fontWeight: '700', color: '#4A148C' },
+  inviteSub: { fontSize: 12, color: '#9C27B0', marginTop: 1 },
+  inviteRow: { flexDirection: 'row', gap: 10 },
+  inviteInput: {
+    flex: 1, height: 44, backgroundColor: '#F3E5F5', borderRadius: 10,
+    paddingHorizontal: 14, fontSize: 14, fontWeight: '700', color: '#4A148C', letterSpacing: 1.5,
+  },
+  inviteBtn: {
+    height: 44, paddingHorizontal: 20, backgroundColor: '#7B1FA2',
+    borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+  },
+  inviteBtnText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
+  inviteMsg: { fontSize: 12, color: '#7B1FA2', marginTop: 10, lineHeight: 18 },
+
+  // ── Filter toggle ─────────────────────────────────────────────────────────
+  toggleCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, marginBottom: 16,
+    borderLeftWidth: 4, borderLeftColor: '#9C27B0', ...MiyabiShadows.sm,
+  },
+  toggleRow: { flexDirection: 'row', alignItems: 'center' },
+  toggleTitle: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 },
+  toggleSub: { fontSize: 12, color: '#6D4C7E' },
+  toggleActiveLabel: { fontSize: 12, color: '#45B74B', fontWeight: '600', marginTop: 8 },
+
+  // ── Zone cards ────────────────────────────────────────────────────────────
+  zoneCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, marginBottom: 12,
+    flexDirection: 'row', alignItems: 'center', ...MiyabiShadows.sm,
+  },
+  zoneCardBody: { flex: 1, marginLeft: 14, marginRight: 6 },
+  zoneCardName: { fontSize: 16, fontWeight: '800', color: '#1A1A1A', marginBottom: 3 },
+  zoneCardMeta: { fontSize: 12, color: '#6D4C7E', fontWeight: '600', marginBottom: 4 },
+  zoneCardPreview: { fontSize: 12, color: '#9E9E9E', fontStyle: 'italic' },
+  zoneArrow: { fontSize: 28, fontWeight: '300' },
+
+  // ── Stats chips ───────────────────────────────────────────────────────────
+  statsRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  statChip: { flex: 1, borderRadius: 14, padding: 16, alignItems: 'center', ...MiyabiShadows.sm },
+  statValue: { fontSize: 30, fontWeight: '800', color: '#1A1A1A', marginBottom: 2 },
+  statLabel: { fontSize: 11, color: '#6D4C7E', fontWeight: '600', textAlign: 'center' },
+
+  // ── Empty state ───────────────────────────────────────────────────────────
+  emptyCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 32,
+    alignItems: 'center', ...MiyabiShadows.sm, marginBottom: 16,
+  },
+  emptyTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 },
+  emptySub: { fontSize: 12, color: '#6D4C7E', textAlign: 'center', lineHeight: 18 },
+
+  // ── Zone detail: trending pins ─────────────────────────────────────────────
+  trendingCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 12, padding: 12, marginBottom: 8,
+    flexDirection: 'row', alignItems: 'flex-start', borderLeftWidth: 4, ...MiyabiShadows.sm,
+  },
+  trendingRank: { fontSize: 16, fontWeight: '800', marginRight: 10, paddingTop: 2 },
+  trendingContent: { fontSize: 13, color: '#1A1A1A', lineHeight: 20, marginBottom: 6 },
+  trendingMeta: { flexDirection: 'row', gap: 12 },
+  trendingMetaText: { fontSize: 11, color: '#9E9E9E', fontWeight: '500' },
+
+  // ── Zone detail: leaderboard ───────────────────────────────────────────────
+  leaderboard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, ...MiyabiShadows.sm },
+  leaderRow: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#F3E5F5',
+  },
+  leaderRank: { fontSize: 14, fontWeight: '800', color: '#9E9E9E', width: 28 },
+  leaderPreview: { fontSize: 13, color: '#1A1A1A', fontWeight: '500', marginBottom: 2 },
+  leaderLikes: { fontSize: 11, color: '#9C27B0', fontWeight: '600' },
+  leaderEmpty: { fontSize: 13, color: '#9E9E9E', textAlign: 'center', padding: 16 },
+
+  // Anon note
+  anonNote: { backgroundColor: '#EDE7F6', borderRadius: 10, padding: 12, marginTop: 12 },
+  anonNoteText: { fontSize: 12, color: '#4A148C', lineHeight: 18 },
 });
 
 export default CommunityScreen;

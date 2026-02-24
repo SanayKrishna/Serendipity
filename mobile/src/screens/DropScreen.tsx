@@ -8,7 +8,7 @@
  * ─ Self-destruct timer dial: 1 h / 6 h / 24 h / 72 h options.
  * ─ Pin-drop ripple animation on confirm.
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,6 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ActivityIndicator,
   Animated,
   Keyboard,
@@ -26,9 +25,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { useFocusEffect } from '@react-navigation/native';
 import locationService, { LocationCoords } from '../services/LocationService';
 import apiService from '../services/ApiService';
 import { BasicMap } from '../components';
+import { SimpleConfirmDialog } from '../components/SimpleConfirmDialog';
 
 const MAX_CHARACTERS = 280;
 
@@ -40,13 +41,26 @@ const nudgeCoords = (lat: number, lon: number, northM: number, eastM: number) =>
 
 // Self-destruct timer options
 const TIMER_OPTIONS: Array<{ label: string; hours: number }> = [
-  { label: '1 h',  hours: 1  },
-  { label: '6 h',  hours: 6  },
-  { label: '24 h', hours: 24 },
-  { label: '72 h', hours: 72 },
+  { label: '1 Day',   hours: 24  },
+  { label: '1 Week',  hours: 168 },
+  { label: '1 Month', hours: 730 },
 ];
 
 const MAX_NUDGE_METERS = 5;
+
+// Minimum clearance before a new drop is allowed at the same spot
+const PIN_MIN_M = 5;           // regular pins must be ≥5 m from any other pin
+const COMMUNITY_PIN_MIN_M = 15; // community pins need ≥15 m clearance
+
+// Haversine for the proximity gate (self-contained — no external lib needed)
+const dropHaversine = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 
 const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { t } = useTranslation();
@@ -59,17 +73,24 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const [isGettingLocation, setIsGettingLocation] = useState(true);
   const [success, setSuccess] = useState(false);
   const [isCommunityPin, setIsCommunityPin] = useState(false);
-  const [selectedHours, setSelectedHours] = useState(24);
+  const [selectedHours, setSelectedHours] = useState(168); // default: 1 week
   // Nudge: offset in metres from locked position
   const [nudgeNorth, setNudgeNorth] = useState(0);
   const [nudgeEast,  setNudgeEast]  = useState(0);
   // Drop animation refs
   const dropAnim   = useRef(new Animated.Value(0)).current;
   const rippleAnim = useRef(new Animated.Value(0)).current;
+  // Community broadcast rings
+  const ring1Anim  = useRef(new Animated.Value(0)).current;
+  const ring2Anim  = useRef(new Animated.Value(0)).current;
+  const ring3Anim  = useRef(new Animated.Value(0)).current;
+  // Track which type was submitted (for success animation)
+  const [submittedAsCommunity, setSubmittedAsCommunity] = React.useState(false);
 
-  useEffect(() => {
-    lockLocation();
-  }, []);
+  // Themed dialog state (replaces Alert.alert)
+  const [dialog, setDialog] = useState({ visible: false, title: '', message: '' });
+  const showInfo = (title: string, message: string) => setDialog({ visible: true, title, message });
+  const dismissDialog = () => setDialog(d => ({ ...d, visible: false }));
 
   // Recalculate displayLocation whenever nudge changes
   useEffect(() => {
@@ -82,11 +103,26 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
 
   const lockLocation = async () => {
     setIsGettingLocation(true);
-    const coords = await locationService.getCurrentLocation();
-    setLockedLocation(coords);
-    setDisplayLocation(coords);
-    setIsGettingLocation(false);
+    try {
+      const coords = await locationService.getCurrentLocation();
+      setLockedLocation(coords);
+      setDisplayLocation(coords);
+    } catch (err) {
+      console.warn('lockLocation error:', err);
+      setLockedLocation(null);
+      setDisplayLocation(null);
+    } finally {
+      setIsGettingLocation(false);
+    }
   };
+
+  // Re-lock GPS each time the screen gains focus.
+  // useFocusEffect fires on every navigation visit; useEffect(fn,[]) only on first mount.
+  useFocusEffect(
+    useCallback(() => {
+      lockLocation();
+    }, [])
+  );
 
   // Total displacement from locked position
   const totalNudge = Math.sqrt(nudgeNorth ** 2 + nudgeEast ** 2);
@@ -99,25 +135,63 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     setNudgeEast(newE);
   };
 
-  const playDropAnimation = () => {
-    dropAnim.setValue(0);
-    rippleAnim.setValue(0);
-    Animated.sequence([
-      Animated.spring(dropAnim,   { toValue: 1, useNativeDriver: true, tension: 80, friction: 8 }),
-      Animated.timing(rippleAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-    ]).start();
+  const playDropAnimation = (isCommunity: boolean) => {
+    if (isCommunity) {
+      // Community: 3 expanding broadcast rings (purple)
+      ring1Anim.setValue(0); ring2Anim.setValue(0); ring3Anim.setValue(0);
+      Animated.stagger(180, [
+        Animated.timing(ring1Anim, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(ring2Anim, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(ring3Anim, { toValue: 1, duration: 900, useNativeDriver: true }),
+      ]).start();
+    } else {
+      // Regular: pin drops from above + single ripple (blue)
+      dropAnim.setValue(0); rippleAnim.setValue(0);
+      Animated.sequence([
+        Animated.spring(dropAnim,   { toValue: 1, useNativeDriver: true, tension: 80, friction: 8 }),
+        Animated.timing(rippleAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ]).start();
+    }
   };
 
   const handleSubmit = async () => {
     if (!message.trim()) {
-      Alert.alert(t('drop.emptyMessageTitle'), t('drop.emptyMessageText'));
+      showInfo(t('drop.emptyMessageTitle'), t('drop.emptyMessageText'));
       return;
     }
     if (!displayLocation) {
-      Alert.alert(t('drop.locationRequiredTitle'), t('drop.locationRequiredText'));
+      showInfo(t('drop.locationRequiredTitle'), t('drop.locationRequiredText'));
       return;
     }
     Keyboard.dismiss();
+
+    // ── Proximity gate ────────────────────────────────────────────────────
+    // Before creating the pin, check that no existing pin is within the
+    // minimum clearance distance. Any pin (own or others') counts.
+    // If the network call fails we let the drop proceed so offline use isn't broken.
+    try {
+      const nearby = await apiService.discoverPins(
+        displayLocation.latitude, displayLocation.longitude
+      );
+      const minDist = isCommunityPin ? COMMUNITY_PIN_MIN_M : PIN_MIN_M;
+      const conflict = nearby.pins.find(p =>
+        dropHaversine(displayLocation.latitude, displayLocation.longitude, p.latitude, p.longitude) < minDist
+      );
+      if (conflict) {
+        const dist = Math.round(
+          dropHaversine(displayLocation.latitude, displayLocation.longitude, conflict.latitude, conflict.longitude)
+        );
+        showInfo(
+          t('drop.tooCloseTitle'),
+          t('drop.tooCloseMsg', { distance: dist, required: minDist })
+        );
+        return;
+      }
+    } catch (_) {
+      // Proximity check failed (offline / server down) — proceed with the drop
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     setIsLoading(true);
     try {
       await apiService.createPin({
@@ -127,7 +201,8 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         is_community:   isCommunityPin,
         duration_hours: selectedHours,
       });
-      playDropAnimation();
+      playDropAnimation(isCommunityPin);
+      setSubmittedAsCommunity(isCommunityPin);
       setSuccess(true);
       setMessage('');
       setNudgeNorth(0);
@@ -145,7 +220,7 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       } else if (error.message) {
         errorMessage = error.message;
       }
-      Alert.alert(title, errorMessage);
+      showInfo(title, errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -153,8 +228,8 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
 
   const remainingChars = MAX_CHARACTERS - message.length;
   const isOverLimit = remainingChars < 0;
-  // GPS accuracy gate — submit blocked when signal is poor
-  const accuracyOk = !displayLocation?.accuracy || displayLocation.accuracy <= 15;
+  // GPS accuracy gate — only block submit on truly terrible signal (>50 m)
+  const accuracyOk = !displayLocation?.accuracy || displayLocation.accuracy <= 50;
   const canSubmit = !!message.trim() && !isOverLimit && !!displayLocation && accuracyOk && !isLoading;
 
   return (
@@ -188,18 +263,39 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           {/* Success State (with drop animation) */}
           {success ? (
             <View style={styles.successContainer}>
-              <Animated.View style={[
-                styles.dropPin,
-                { transform: [{ translateY: dropAnim.interpolate({ inputRange: [0,1], outputRange: [-60, 0] }) }], opacity: dropAnim },
-              ]}>
-                <Text style={styles.successIcon}>📍</Text>
-              </Animated.View>
-              <Animated.View style={[
-                styles.ripple,
-                { transform: [{ scale: rippleAnim.interpolate({ inputRange: [0,1], outputRange: [0.5, 2.5] }) }], opacity: rippleAnim.interpolate({ inputRange: [0,1], outputRange: [0.7, 0] }) },
-              ]} />
-              <Text style={styles.successText}>{t('drop.successTitle')}</Text>
-              <Text style={styles.successSubtext}>📍 {t('drop.successSubtext')}</Text>
+              {submittedAsCommunity ? (
+                // Community broadcast animation: 3 purple expanding rings
+                <View style={styles.broadcastContainer}>
+                  {[ring1Anim, ring2Anim, ring3Anim].map((anim, i) => (
+                    <Animated.View key={i} style={[
+                      styles.broadcastRing,
+                      {
+                        transform: [{ scale: anim.interpolate({ inputRange: [0,1], outputRange: [0.2, 2.8] }) }],
+                        opacity: anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.9, 0.5, 0] }),
+                      },
+                    ]} />
+                  ))}
+                  <View style={styles.broadcastCenter}>
+                    <Text style={styles.broadcastIcon}>&#x2605;</Text>
+                  </View>
+                </View>
+              ) : (
+                // Regular pin drop animation
+                <>
+                  <Animated.View style={[
+                    styles.dropPin,
+                    { transform: [{ translateY: dropAnim.interpolate({ inputRange: [0,1], outputRange: [-60, 0] }) }], opacity: dropAnim },
+                  ]}>
+                    <Text style={styles.successIcon}>&#x1F4CD;</Text>
+                  </Animated.View>
+                  <Animated.View style={[
+                    styles.ripple,
+                    { transform: [{ scale: rippleAnim.interpolate({ inputRange: [0,1], outputRange: [0.5, 2.5] }) }], opacity: rippleAnim.interpolate({ inputRange: [0,1], outputRange: [0.7, 0] }) },
+                  ]} />
+                </>
+              )}
+              <Text style={styles.successText}>{submittedAsCommunity ? 'Community Signal Sent!' : t('drop.successTitle')}</Text>
+              <Text style={styles.successSubtext}>{submittedAsCommunity ? '★ Your pin is now visible to everyone nearby' : '📍 ' + t('drop.successSubtext')}</Text>
             </View>
           ) : (
             <>
@@ -234,7 +330,7 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
                   <View style={styles.accuracyRow}>
                     <Text style={[styles.accuracyText, !accuracyOk && styles.accuracyBad]}>
                       {accuracyOk ? '✅' : '⚠️'} GPS ±{Math.round(displayLocation.accuracy ?? 0)} m
-                      {!accuracyOk ? '  — move to open sky' : ''}
+                      {!accuracyOk ? '  — signal weak, try moving outside' : ''}
                     </Text>
                   </View>
                 )}
@@ -368,6 +464,16 @@ const DropScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <SimpleConfirmDialog
+        visible={dialog.visible}
+        title={dialog.title}
+        message={dialog.message}
+        confirmText="OK"
+        cancelText=""
+        onConfirm={dismissDialog}
+        onCancel={dismissDialog}
+      />
     </SafeAreaView>
   );
 };
@@ -617,6 +723,12 @@ const styles = StyleSheet.create({
   // Drop animation
   dropPin:   { position: 'absolute', top: 40 },
   ripple:    { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#87CEEB', position: 'absolute', top: 60 },
+
+  // Community broadcast animation
+  broadcastContainer: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  broadcastRing: { position: 'absolute', width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#9C27B0' },
+  broadcastCenter: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#9C27B0', alignItems: 'center', justifyContent: 'center' },
+  broadcastIcon: { fontSize: 22, color: 'white' },
 
   // Community Pin Toggle
   communityToggleContainer: {

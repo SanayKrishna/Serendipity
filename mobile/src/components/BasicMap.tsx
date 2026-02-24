@@ -32,6 +32,8 @@ interface BasicMapProps {
   exploredCircles?: ExploredCircle[];
   /** When set, the map camera smoothly flies to this location (forward geocode result) */
   flyToLocation?: { lat: number; lon: number; label?: string } | null;
+  /** Increment this token to smoothly animate map rotation back to 0° */
+  resetRotationToken?: number;
 }
 
 const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
@@ -43,28 +45,35 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { box-sizing: border-box; }
-    html, body { margin:0; padding:0; overflow:hidden; }
-    #map-wrapper { width:100vw; height:100vh; position:relative; }
-    #map { position:absolute; top:0; bottom:0; width:100%; transform-origin:center center; transition: transform 0.25s ease-out; }
+    /* html/body/outer-container all share the OSM land-tile colour.
+       If any pixel is ever exposed during rotation it looks like a map tile, never black. */
+    html, body { margin:0; padding:0; overflow:hidden; width:100%; height:100%; background:#e8e0d4; }
+    /* outer-container = the fixed full-screen viewport window — never moves, clips everything */
+    #outer-container { position:fixed; top:0; left:0; width:100vw; height:100vh; overflow:hidden; background:#e8e0d4; }
+    /* map-wrapper is 260% of the viewport, centred via -80% offset.
+       Maths: the inscribed circle of 260%×260% wrapper has radius 1.3×min(vw,vh).
+       Viewport circumradius √((vw/2)²+(vh/2)²) ≈ 1.19×vw on a 375×812 phone (≈447px).
+       1.3×187.5 = 487.5 > 447 → every viewport corner is always covered at ANY rotation angle.
+       transform-origin:50% 50% pivots the rotation around the visual screen centre. */
+    #map-wrapper { position:absolute; top:-80%; left:-80%; width:260%; height:260%; transform-origin:50% 50%; background:#e8e0d4; }
+    #map { position:absolute; top:0; bottom:0; width:100%; height:100%; z-index:452; }
     #fog-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:450; width:100%; height:100%; }
     #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:451; width:100%; height:100%; filter:blur(10px); }
 
     .user-avatar-wrapper { width:60px; height:60px; transition:transform 0.15s ease-out; }
     .user-avatar-wrapper svg { width:60px; height:60px; display:block; }
-    .pin-normal { border-radius:50% 50% 50% 0; border:2px solid white; transform:rotate(-45deg); }
-    .pin-comm { border-radius:3px; border:2px solid white; transform:rotate(45deg); }
-    .pin-muted { background:#999; border-radius:50%; border:2px solid white; opacity:.5; }
-    .pin-suppressed { background:#000; border-radius:50%; opacity:.3; }
     .pin-cluster { background:#1a1a2e; color:#fff; border:3px solid rgba(255,255,255,0.9); border-radius:6px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; transform:rotate(45deg); width:32px; height:32px; }
     .pin-cluster-inner { transform:rotate(-45deg); pointer-events:none; }
     .place-label { color:rgba(255,255,255,0.85); font-size:10px; font-weight:600; white-space:nowrap; text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 8px rgba(0,0,0,0.7); pointer-events:none; background:rgba(0,0,10,0.45); padding:1px 4px; border-radius:3px; max-width:90px; overflow:hidden; text-overflow:ellipsis; }
   </style>
 </head>
 <body>
+<div id="outer-container">
 <div id="map-wrapper">
   <div id="map"></div>
   <canvas id="fog-canvas"></canvas>
   <canvas id="cloud-canvas"></canvas>
+</div>
 </div>
 <script>
   'use strict';
@@ -151,7 +160,25 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   var userLat=0, userLon=0;
   function applyHeading(h){ var el=document.getElementById('user-avatar'); if(el) el.style.transform='rotate('+h+'deg)'; }
 
-  var CLUSTER_THRESHOLD_M = 5;
+  // ── Smooth avatar position lerp (like Google Maps) ─────────────────────────
+  var _targetLat=0, _targetLon=0, _curLat=0, _curLon=0, _avatarRAF=null, _avatarInited=false;
+  function _lerp(a,b,t){ return a+(b-a)*t; }
+  function _animAvatar(){
+    var SPEED=0.10; // lower = smoother/slower, 0.10 ≈ Google Maps feel
+    _curLat=_lerp(_curLat,_targetLat,SPEED);
+    _curLon=_lerp(_curLon,_targetLon,SPEED);
+    userMarker.setLatLng([_curLat,_curLon]);
+    var done=Math.abs(_targetLat-_curLat)<0.0000005 && Math.abs(_targetLon-_curLon)<0.0000005;
+    if(done){ _avatarRAF=null; userMarker.setLatLng([_targetLat,_targetLon]); }
+    else { _avatarRAF=requestAnimationFrame(_animAvatar); }
+  }
+  function updateAvatarTo(lat,lon){
+    _targetLat=lat; _targetLon=lon;
+    if(!_avatarInited){ _curLat=lat; _curLon=lon; _avatarInited=true; userMarker.setLatLng([lat,lon]); return; }
+    if(!_avatarRAF) _avatarRAF=requestAnimationFrame(_animAvatar);
+  }
+
+  var CLUSTER_THRESHOLD_M = 3; // pins within 3 m of each other merge into one combined icon
   function clusterPins(pins){
     var clusters = [], used = new Array(pins.length).fill(false);
     for (var i=0;i<pins.length;i++){
@@ -162,17 +189,52 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     return clusters;
   }
 
+  var _lastPinTapMs=0;
+  function pinTap(id,type){ var now=Date.now(); if(now-_lastPinTapMs<350)return; _lastPinTapMs=now; if(!window.ReactNativeWebView)return; window.ReactNativeWebView.postMessage(JSON.stringify({type:type,pinId:id})); }
+  function clusterTap(idsStr){ var now=Date.now(); if(now-_lastPinTapMs<350)return; _lastPinTapMs=now; if(!window.ReactNativeWebView)return; var ids=String(idsStr).split(',').map(Number); window.ReactNativeWebView.postMessage(JSON.stringify({type:'clusterPress',pinIds:ids})); }
+
   function makePinIcon(pin){
-    var dist = pin.distance || 9999; var cls;
-    if (pin.is_suppressed) cls='pin-suppressed'; else if (pin.isMuted) cls='pin-muted'; else if (pin.is_community) cls='pin-comm ' + (dist<10?'pin-close':dist<30?'pin-medium':'pin-far'); else cls='pin-normal ' + (dist<10?'pin-close':dist<30?'pin-medium':'pin-far');
-    var dim = pin.is_suppressed ? 8 : dist<10?18:dist<30?16:14;
-    return L.divIcon({ className: cls, iconSize:[dim,dim], iconAnchor: pin.is_suppressed?[4,4]:[dim/2,dim] });
+    // Every pin gets a min 44x44 px transparent touch wrapper (mobile HIG standard)
+    // onclick uses data-pid/data-ptype so no quote-escaping issues inside the template literal
+    var TAP=44;
+    if(pin.is_suppressed){
+      var s='<div data-pid="'+pin.id+'" data-ptype="suppressedPinPress" onclick="pinTap(this.dataset.pid,this.dataset.ptype)" style="width:'+TAP+'px;height:'+TAP+'px;display:flex;align-items:center;justify-content:center;cursor:pointer;"><div style="width:8px;height:8px;border-radius:50%;background:rgba(0,0,0,0.35);"></div></div>';
+      return L.divIcon({className:'leaflet-interactive',html:s,iconSize:[TAP,TAP],iconAnchor:[TAP/2,TAP/2]});
+    }
+    if(pin.isMuted){
+      var s='<div data-pid="'+pin.id+'" data-ptype="mutedPinPress" onclick="pinTap(this.dataset.pid,this.dataset.ptype)" style="width:'+TAP+'px;height:'+TAP+'px;display:flex;align-items:center;justify-content:center;cursor:pointer;"><div style="width:12px;height:12px;border-radius:50%;background:#aaa;border:1.5px solid rgba(255,255,255,0.6);opacity:0.5;"></div></div>';
+      return L.divIcon({className:'leaflet-interactive',html:s,iconSize:[TAP,TAP],iconAnchor:[TAP/2,TAP/2]});
+    }
+    var dist=pin.distance||9999;
+    // Visual size only — tap target stays 44px regardless
+    var dim=dist<10?20:dist<30?17:14;
+    if(pin.is_community){
+      // Star circle icon — purple theme
+      var c=dist<10?'#E040FB':'#9C27B0';
+      var svg='<svg width="'+dim+'" height="'+dim+'" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="display:block;filter:drop-shadow(0 1px 4px rgba(0,0,0,0.6));">'
+        +'<circle cx="12" cy="12" r="10" fill="'+c+'" stroke="white" stroke-width="2.5"/>'
+        +'<text x="12" y="16" text-anchor="middle" font-size="13" fill="white" font-weight="bold">&#x2605;</text>'
+        +'</svg>';
+      var wrap='<div data-pid="'+pin.id+'" data-ptype="pinPress" onclick="pinTap(this.dataset.pid,this.dataset.ptype)" style="width:'+TAP+'px;height:'+TAP+'px;display:flex;align-items:center;justify-content:center;cursor:pointer;">'+svg+'</div>';
+      return L.divIcon({className:'leaflet-interactive',html:wrap,iconSize:[TAP,TAP],iconAnchor:[TAP/2,TAP/2]});
+    } else {
+      // Teardrop pin — red (nearby) or blue (far)
+      var c=dist<10?'#F44336':'#1976D2';
+      var pw=dim; var ph=Math.round(dim*1.5);
+      var svg='<svg width="'+pw+'" height="'+ph+'" viewBox="0 0 20 30" xmlns="http://www.w3.org/2000/svg" style="display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">'
+        +'<path d="M10 1 C5.3 1 1.5 4.8 1.5 9.5 C1.5 16.5 10 29 10 29 C10 29 18.5 16.5 18.5 9.5 C18.5 4.8 14.7 1 10 1 Z" fill="'+c+'" stroke="white" stroke-width="2"/>'
+        +'<circle cx="10" cy="9.5" r="4" fill="white"/>'
+        +'</svg>';
+      var wW=Math.max(TAP,pw+12); var wH=Math.max(TAP,ph+10);
+      var wrap='<div data-pid="'+pin.id+'" data-ptype="pinPress" onclick="pinTap(this.dataset.pid,this.dataset.ptype)" style="width:'+wW+'px;height:'+wH+'px;display:flex;align-items:flex-end;justify-content:center;cursor:pointer;">'+svg+'</div>';
+      return L.divIcon({className:'leaflet-interactive',html:wrap,iconSize:[wW,wH],iconAnchor:[wW/2,wH]});
+    }
   }
 
   function renderPins(pins){ pinMarkers.forEach(function(m){ map.removeLayer(m); }); pinMarkers = []; var clusters = clusterPins(pins);
     clusters.forEach(function(group){
-      if (group.length===1){ var pin=group[0]; var icon=makePinIcon(pin); var marker=L.marker([pin.latitude,pin.longitude],{icon:icon}).addTo(map); marker.on('click',function(){ if (!window.ReactNativeWebView) return; var type = pin.isMuted ? 'mutedPinPress' : pin.is_suppressed ? 'suppressedPinPress' : 'pinPress'; window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, pinId: pin.id })); }); pinMarkers.push(marker);
-      } else { var lat = group.reduce(function(s,p){return s+p.latitude;},0)/group.length; var lon = group.reduce(function(s,p){return s+p.longitude;},0)/group.length; var ids = group.map(function(p){return p.id}); var count = group.length; var clusterIcon = L.divIcon({ className:'', html:'<div class="pin-cluster"><span class="pin-cluster-inner">'+count+'</span></div>', iconSize:[32,32], iconAnchor:[16,16] }); var cm = L.marker([lat,lon],{icon:clusterIcon}).addTo(map); cm.on('click',function(){ if (!window.ReactNativeWebView) return; window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'clusterPress', pinIds: ids })); }); pinMarkers.push(cm); }
+      if (group.length===1){ var pin=group[0]; var icon=makePinIcon(pin); var marker=L.marker([pin.latitude,pin.longitude],{icon:icon}).addTo(map); marker.on('click',function(e){ L.DomEvent.stopPropagation(e); var type=pin.isMuted?'mutedPinPress':pin.is_suppressed?'suppressedPinPress':'pinPress'; pinTap(pin.id,type); }); pinMarkers.push(marker);
+      } else { var lat = group.reduce(function(s,p){return s+p.latitude;},0)/group.length; var lon = group.reduce(function(s,p){return s+p.longitude;},0)/group.length; var ids = group.map(function(p){return p.id}); var count = group.length; var idsStr=ids.join(','); var clusterIcon = L.divIcon({ className:'leaflet-interactive', html:'<div data-cids="'+idsStr+'" onclick="clusterTap(this.dataset.cids)" class="pin-cluster"><span class="pin-cluster-inner">'+count+'</span></div>', iconSize:[40,40], iconAnchor:[20,20] }); var cm = L.marker([lat,lon],{icon:clusterIcon}).addTo(map); cm.on('click',function(e){ L.DomEvent.stopPropagation(e); clusterTap(idsStr); }); pinMarkers.push(cm); }
     });
   }
 
@@ -206,16 +268,113 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     });
   }
 
-  function handleMessage(raw){ try{ var data = JSON.parse(raw); }catch(e){return;} if (data.type === 'updateLocation'){ var loc=data.location; userLat=loc.latitude; userLon=loc.longitude; var pins=data.pins||[]; currentPins=pins; var expl=data.exploredCircles||[]; var hdg = (typeof data.compassHeading==='number')?data.compassHeading:0; exploredCircles = expl; if (!map){ initMap(loc.latitude, loc.longitude); return; } userMarker.setLatLng([loc.latitude, loc.longitude]); applyHeading(hdg); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); } else if (data.type==='setHeading'){ applyHeading(data.heading); } else if (data.type==='setExploredCircles'){ exploredCircles = data.circles || []; renderPlaceNames(exploredCircles); scheduleFogRedraw(); } else if (data.type==='flyTo'){ if(map){ map.flyTo([data.lat, data.lon], 17, {animate:true, duration:1.2}); } } }
+  function handleMessage(raw){ try{ var data = JSON.parse(raw); }catch(e){return;} if (data.type === 'updateLocation'){ var loc=data.location; userLat=loc.latitude; userLon=loc.longitude; var pins=data.pins||[]; currentPins=pins; var expl=data.exploredCircles||[]; var hdg = (typeof data.compassHeading==='number')?data.compassHeading:0; exploredCircles = expl; if (!map){ initMap(loc.latitude, loc.longitude); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); return; } updateAvatarTo(loc.latitude, loc.longitude); applyHeading(hdg); renderPins(pins); renderPlaceNames(expl); scheduleFogRedraw(); } else if (data.type==='setHeading'){ applyHeading(data.heading); } else if (data.type==='setExploredCircles'){ exploredCircles = data.circles || []; renderPlaceNames(exploredCircles); scheduleFogRedraw(); } else if (data.type==='flyTo'){ if(map){ map.flyTo([data.lat, data.lon], 17, {animate:true, duration:1.2}); } } else if (data.type==='resetRotation'){ _rotAngle = 0; _mapWrap.style.transition = 'transform 0.4s ease-out'; _mapWrap.style.transform = 'rotate(0deg)'; setTimeout(function(){ _mapWrap.style.transition = 'none'; }, 420); scheduleFogRedraw(); } }
 
   window.addEventListener('message', function(e){ handleMessage(e.data); }); document.addEventListener('message', function(e){ handleMessage(e.data); });
 
   initMap(${lat}, ${lon});
+
+  // ── Unified touch handler: rotation-aware 1-finger pan + 2-finger rotate ────
+  //
+  // WHY we disable Leaflet's native drag:
+  //   Leaflet pans the map in its own tile-coordinate space. When #map-wrapper is
+  //   rotated by θ°, a left-swipe in screen space moves the tiles diagonally,
+  //   making the pan feel backwards/wrong. By handling drag ourselves and
+  //   counter-rotating the delta by -θ before calling map.panBy(), the map always
+  //   moves in the exact direction the finger travels regardless of rotation angle.
+  //
+  // WHY we use a 5 px movement threshold before starting pan:
+  //   Without a threshold every tap that moves even 1 px fires map.panBy(), which
+  //   tells Leaflet the map moved and prevents it from firing the marker click event.
+  //   With the threshold, genuine taps (< 5 px total movement) fall through untouched
+  //   so Leaflet's marker click handler fires normally — fixing multi-tap on pins.
+
+  var _rotAngle = 0, _rotStart = null;
+  var _dragStart = null, _dragTotal = 0;
+  var _outerContainer = document.getElementById('outer-container');
+  var _mapWrap = document.getElementById('map-wrapper');
+
+  // Disable Leaflet's own drag — we replace it below with rotation-compensated pan
+  if (map) { map.dragging.disable(); }
+
+  function _getTwoFingerAngle(e) {
+    return Math.atan2(
+      e.touches[1].clientY - e.touches[0].clientY,
+      e.touches[1].clientX - e.touches[0].clientX
+    ) * 180 / Math.PI;
+  }
+
+  _outerContainer.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 1) {
+      // Begin tracking a potential 1-finger drag
+      _dragStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      _dragTotal = 0;
+    } else if (e.touches.length === 2) {
+      // 2-finger gesture — cancel any drag and begin rotation tracking
+      _dragStart = null;
+      _rotStart = { angle: _getTwoFingerAngle(e), base: _rotAngle };
+    }
+  }, { passive: true });
+
+  _outerContainer.addEventListener('touchmove', function(e) {
+    if (e.touches.length === 1 && _dragStart) {
+      var dx = e.touches[0].clientX - _dragStart.x;
+      var dy = e.touches[0].clientY - _dragStart.y;
+      _dragStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      _dragTotal += Math.sqrt(dx * dx + dy * dy);
+      // Raised to 10px — Android taps routinely jitter 6-8px; below this we
+      // treat it as a tap and never call panBy (which would move pins away).
+      if (_dragTotal < 10) return;
+      if (!map) return;
+      // Counter-rotate the screen-space delta by -_rotAngle so the map always
+      // pans in the direction the finger is physically moving on screen
+      var rad = -_rotAngle * Math.PI / 180;
+      var mx = dx * Math.cos(rad) - dy * Math.sin(rad);
+      var my = dx * Math.sin(rad) + dy * Math.cos(rad);
+      map.panBy([-mx, -my], { animate: false, noMoveStart: true });
+    } else if (e.touches.length === 2 && _rotStart !== null) {
+      _rotAngle = _rotStart.base + (_getTwoFingerAngle(e) - _rotStart.angle);
+      _mapWrap.style.transition = 'none';
+      _mapWrap.style.transform = 'rotate(' + _rotAngle + 'deg)';
+      scheduleFogRedraw();
+    }
+  }, { passive: true });
+
+  _outerContainer.addEventListener('touchend', function(e) {
+    if (e.touches.length < 2) { _rotStart = null; }
+    if (e.touches.length < 1) {
+      // ── Explicit tap detection ──────────────────────────────────────────
+      // We cannot rely on the browser's synthetic click event after a parent
+      // touchstart listener intercepts the sequence on Android WebView, and
+      // map.dragging.disable() also disables Leaflet's L.Map.Tap handler that
+      // normally converts touchend→click for markers.
+      // Solution: on a clean tap (dragTotal < 10px), use elementFromPoint to
+      // find exactly what was under the finger and call pinTap/clusterTap
+      // directly — bypassing both unreliable paths entirely.
+      if (_dragStart !== null && _dragTotal < 10 && e.changedTouches.length > 0) {
+        var tx = e.changedTouches[0].clientX;
+        var ty = e.changedTouches[0].clientY;
+        var el = document.elementFromPoint(tx, ty);
+        while (el && el !== document.body) {
+          if (el.dataset && el.dataset.pid) {
+            pinTap(el.dataset.pid, el.dataset.ptype || 'pinPress');
+            break;
+          }
+          if (el.dataset && el.dataset.cids) {
+            clusterTap(el.dataset.cids);
+            break;
+          }
+          el = el.parentElement;
+        }
+      }
+      _dragStart = null;
+    }
+  }, { passive: true });
 </script>
 </body>
 </html>`;
 
-export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPress, onClusterPress, onMutedPinPress, discoveryRadius = 50, compassHeading = 0, exploredCircles = [], flyToLocation }) => {
+export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPress, onClusterPress, onMutedPinPress, discoveryRadius = 50, compassHeading = 0, exploredCircles = [], flyToLocation, resetRotationToken }) => {
   const webViewRef = useRef<WebView>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
@@ -236,6 +395,15 @@ export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPre
       } catch (e) { /* swallow */ }
     }
   }, [flyToLocation, mapLoaded]);
+
+  // Reset map rotation back to 0° (triggered by incrementing resetRotationToken)
+  useEffect(() => {
+    if (resetRotationToken && webViewRef.current && mapLoaded) {
+      try {
+        webViewRef.current.postMessage(JSON.stringify({ type: 'resetRotation' }));
+      } catch (e) { /* swallow */ }
+    }
+  }, [resetRotationToken, mapLoaded]);
 
   const handleMessage = (event: any) => {
     try {

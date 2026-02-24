@@ -4,6 +4,7 @@
  */
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { MiyabiColors, MiyabiShadows } from '../styles/miyabi';
 
 interface AppLogoProps {
@@ -11,6 +12,9 @@ interface AppLogoProps {
 }
 
 export const AppLogo: React.FC<AppLogoProps> = ({ size = 'medium' }) => {
+  const { i18n } = useTranslation();
+  const appName = i18n.language === 'ja' ? 'セレンディピティ' : 'Serendipity';
+
   const sizes = {
     small: {
       container: 70,
@@ -35,7 +39,7 @@ export const AppLogo: React.FC<AppLogoProps> = ({ size = 'medium' }) => {
   const currentSize = sizes[size];
 
   return (
-    <View style={[styles.container, { width: currentSize.container, height: currentSize.container }]}>
+    <View style={[styles.container, { width: currentSize.container }]}>
       <View style={[styles.toriiGate, { width: currentSize.gate, height: currentSize.gate * 0.9 }]}>
         {/* Torii gate top bar */}
         <View style={[styles.toriiTop, { height: currentSize.gate * 0.15 }]} />
@@ -49,8 +53,13 @@ export const AppLogo: React.FC<AppLogoProps> = ({ size = 'medium' }) => {
         {/* Sakura accent */}
         <Text style={[styles.sakura, { fontSize: currentSize.gate * 0.3 }]}>🌸</Text>
       </View>
-      <Text style={[styles.text, { fontSize: currentSize.text, marginTop: 8 }]}>Serendipity</Text>
-      <Text style={[styles.subtext, { fontSize: currentSize.text * 0.75 }]}>セレンディピティ</Text>
+      <Text
+        style={[styles.text, { fontSize: currentSize.text, marginTop: 8, width: currentSize.container }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {appName}
+      </Text>
     </View>
   );
 };
@@ -99,9 +108,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: MiyabiColors.sumi,
     letterSpacing: 0.5,
-  },
-  subtext: {
-    color: MiyabiColors.sumiLight,
-    marginTop: 2,
+    textAlign: 'center',
   },
 });

@@ -14,14 +14,14 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   RefreshControl,
   Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useTranslation } from 'react-i18next';
 import { DiaryService, DiaryEntry, DiaryRating } from '../services/DiaryService';
 import apiService, { UserStats, PinStatsResponse } from '../services/ApiService';
+import { SimpleConfirmDialog } from '../components/SimpleConfirmDialog';
+import { useTranslation } from 'react-i18next';
 import {
   MiyabiColors,
   MiyabiSpacing,
@@ -42,7 +42,6 @@ const SYNC_COOLDOWN_MS = 30_000; // 30 seconds per-pin cooldown
 
 const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { t } = useTranslation();
-  
   // State
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [userStats, setUserStats] = useState<UserStats | null>(null);
@@ -57,6 +56,20 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const [isOffline, setIsOffline] = useState(false);
   // Slide-out animations keyed by pin_id
   const slideAnims = useRef<Record<number, Animated.Value>>({}).current;
+
+  // Themed dialog state (replaces Alert.alert)
+  const dialogActionRef = useRef<(() => void) | null>(null);
+  const [dialog, setDialog] = useState({ visible: false, title: '', message: '', confirmText: 'OK', cancelText: '', isDangerous: false });
+  const showInfo = (title: string, message: string) => {
+    dialogActionRef.current = null;
+    setDialog({ visible: true, title, message, confirmText: 'OK', cancelText: '', isDangerous: false });
+  };
+  const showConfirm = (title: string, message: string, onConfirm: () => void, isDangerous = false) => {
+    dialogActionRef.current = onConfirm;
+    setDialog({ visible: true, title, message, confirmText: isDangerous ? 'Delete' : 'Confirm', cancelText: 'Cancel', isDangerous });
+  };
+  const dismissDialog = () => setDialog(d => ({ ...d, visible: false }));
+  const handleDialogConfirm = () => { dismissDialog(); dialogActionRef.current?.(); };
 
   // ============================================
   // INITIALIZATION
@@ -154,27 +167,21 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   // ACTIONS
   // ============================================
 
-  const handleDeleteEntry = async (entryId: number) => {
-    Alert.alert(
-      t('diary.deleteConfirm'),
-      t('diary.deleteMessage'),
-      [
-        { text: t('diary.cancel'), style: 'cancel' },
-        {
-          text: t('diary.delete'),
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await DiaryService.deleteEntry(entryId);
-              await fetchEntries();
-              Alert.alert('✅ ' + t('diary.deleteSuccess'), t('diary.deleteSuccess'));
-            } catch (error: any) {
-              console.error('❌ Failed to delete entry:', error);
-              Alert.alert(t('common.error'), error.message || t('diary.deleteError'));
-            }
-          },
-        },
-      ]
+  const handleDeleteEntry = (entryId: number) => {
+    showConfirm(
+      t('diary.deleteEntryTitle'),
+      t('diary.deleteEntryMsg'),
+      async () => {
+        try {
+          await DiaryService.deleteEntry(entryId);
+          await fetchEntries();
+          showInfo(t('diary.deletedEntry'), t('diary.deletedEntryMsg'));
+        } catch (error: any) {
+          console.error('❌ Failed to delete entry:', error);
+          showInfo(t('common.error'), error.message || t('diary.deleteError'));
+        }
+      },
+      true
     );
   };
 
@@ -288,7 +295,7 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
                 {entry.pin_content || `Pin #${entry.pin_id}`}
               </Text>
               {isArchived ? (
-                <View style={styles.expiredBadge}><Text style={styles.expiredBadgeText}>⏱️ Expired</Text></View>
+                <View style={styles.expiredBadge}><Text style={styles.expiredBadgeText}>⏱️ {t('diary.expired')}</Text></View>
               ) : (
                 <View style={[styles.ratingBadge, { backgroundColor: ratingColor }]}>
                   <Text style={styles.ratingBadgeIcon}>{ratingIcon}</Text>
@@ -324,7 +331,7 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
                 disabled={cooling}
               >
                 <Text style={styles.syncBtnTxt}>
-                  {cooling ? `↻ ${remaining}s` : '↻ Sync'}
+                  {cooling ? `↻ ${remaining}s` : `↻ ${t('diary.sync')}`}
                 </Text>
               </TouchableOpacity>
             )}
@@ -366,12 +373,12 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             <Text style={styles.menuIcon}>☰</Text>
           </TouchableOpacity>
           <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>{t('diary.title')}</Text>
-            <Text style={styles.headerSubtitle}>{t('diary.subtitle')}</Text>
+            <Text style={styles.headerTitle}>{t('diary.headerTitle')}</Text>
+            <Text style={styles.headerSubtitle}>{t('diary.headerSubtitle')}</Text>
           </View>
         </View>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>📔 {t('common.loading')}</Text>
+          <Text style={styles.loadingText}>📔 {t('diary.loadingDiary')}</Text>
         </View>
       </View>
     );
@@ -391,14 +398,14 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           <Text style={styles.menuIcon}>☰</Text>
         </TouchableOpacity>
         <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>{t('diary.title')}</Text>
+          <Text style={styles.headerTitle}>{t('diary.headerTitle')}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Text style={styles.headerSubtitle}>
-              {t('diary.entries', { count: entries.length })}
+              {t('diary.discoveries', { count: entries.length })}
             </Text>
             {isOffline && (
               <View style={styles.offlineBadge}>
-                <Text style={styles.offlineBadgeText}>📵 offline</Text>
+                <Text style={styles.offlineBadgeText}>📵 {t('diary.offline')}</Text>
               </View>
             )}
           </View>
@@ -449,10 +456,8 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         {entries.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>📔</Text>
-            <Text style={styles.emptyText}>{t('diary.empty')}</Text>
-            <Text style={styles.emptySubtext}>
-              {t('diary.emptySubtext')}
-            </Text>
+            <Text style={styles.emptyText}>{t('diary.noEntriesYet')}</Text>
+            <Text style={styles.emptySubtext}>{t('diary.noEntriesSub')}</Text>
           </View>
         ) : (
           <>
@@ -465,7 +470,7 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
               <View style={styles.archivedSection}>
                 <View style={styles.dateSectionHeader}>
                   <View style={styles.dateSectionLine} />
-                  <Text style={[styles.dateSectionText, { color: '#9E9E9E' }]}>🗄️ Archived</Text>
+                  <Text style={[styles.dateSectionText, { color: '#9E9E9E' }]}>🗄️ {t('diary.archived')}</Text>
                   <View style={styles.dateSectionLine} />
                 </View>
                 {entries
@@ -476,11 +481,22 @@ const DiaryScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             )}
             
             <View style={styles.timelineEnd}>
-              <Text style={styles.timelineEndText}>{t('diary.historyEnd')}</Text>
+              <Text style={styles.timelineEndText}>— {t('diary.timelineEnd')} —</Text>
             </View>
           </>
         )}
       </ScrollView>
+
+      <SimpleConfirmDialog
+        visible={dialog.visible}
+        title={dialog.title}
+        message={dialog.message}
+        confirmText={dialog.confirmText}
+        cancelText={dialog.cancelText}
+        isDangerous={dialog.isDangerous}
+        onConfirm={handleDialogConfirm}
+        onCancel={dismissDialog}
+      />
     </View>
   );
 };

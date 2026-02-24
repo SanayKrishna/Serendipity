@@ -12,7 +12,6 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
-import { useTranslation } from 'react-i18next';
 
 import RadarScreen from '../screens/RadarScreen';
 import DropScreen from '../screens/DropScreen';
@@ -21,35 +20,17 @@ import DiaryScreen from '../screens/DiaryScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import { AppLogo } from '../components/AppLogo';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiShadows } from '../styles/miyabi';
+import { useTranslation } from 'react-i18next';
 
 const Drawer = createDrawerNavigator();
 
 // Custom Drawer Content with refined design
 const CustomDrawerContent = (props: any) => {
-  const { t, i18n } = useTranslation();
-  
-  const languageLabels: { [key: string]: string } = {
-    en: 'English',
-    ja: '日本語',
-  };
-  
   return (
     <DrawerContentScrollView {...props} style={styles.drawerContainer}>
-      {/* Refined Header */}
+      {/* Clean centred header — matches washi drawer background */}
       <View style={styles.drawerHeader}>
-        <View style={styles.headerGradient}>
-          <View style={styles.logoContainer}>
-            <AppLogo size="small" />
-          </View>
-          <View style={styles.headerTextBlock}>
-            <Text style={styles.drawerAppName}>Serendipity</Text>
-            <View style={styles.languagePill}>
-              <Text style={styles.languagePillText}>
-                {languageLabels[i18n.language] || 'English'}
-              </Text>
-            </View>
-          </View>
-        </View>
+        <AppLogo size="medium" />
       </View>
       
       {/* Navigation Items */}
@@ -60,7 +41,7 @@ const CustomDrawerContent = (props: any) => {
       {/* Footer */}
       <View style={styles.drawerFooter}>
         <View style={styles.footerDivider} />
-        <Text style={styles.drawerFooterText}>v1.0.0 • セレンディピティ</Text>
+        <Text style={styles.drawerFooterText}>Serendipity • v1.0.0</Text>
       </View>
     </DrawerContentScrollView>
   );
@@ -91,15 +72,15 @@ const AppNavigator: React.FC = () => {
           component={RadarScreen}
           options={{
             title: t('navigation.radar'),
-            drawerIcon: ({ color }) => <Text style={styles.drawerIcon}>🗺️</Text>,
+            drawerIcon: () => <Text style={styles.drawerIcon}>🗺️</Text>,
           }}
         />
         <Drawer.Screen
           name="Drop"
           component={DropScreen}
           options={{
-            title: t('navigation.drop'),
-            drawerIcon: ({ color }) => <Text style={styles.drawerIcon}>📍</Text>,
+            title: t('navigation.dropPin'),
+            drawerIcon: () => <Text style={styles.drawerIcon}>📍</Text>,
           }}
         />
         <Drawer.Screen
@@ -107,7 +88,7 @@ const AppNavigator: React.FC = () => {
           component={CommunityScreen}
           options={{
             title: t('navigation.community'),
-            drawerIcon: ({ color }) => <Text style={styles.drawerIcon}>👥</Text>,
+            drawerIcon: () => <Text style={styles.drawerIcon}>👥</Text>,
           }}
         />
         <Drawer.Screen
@@ -115,7 +96,7 @@ const AppNavigator: React.FC = () => {
           component={DiaryScreen}
           options={{
             title: t('navigation.diary'),
-            drawerIcon: ({ color }) => <Text style={styles.drawerIcon}>📔</Text>,
+            drawerIcon: () => <Text style={styles.drawerIcon}>📔</Text>,
           }}
         />
         <Drawer.Screen
@@ -123,7 +104,7 @@ const AppNavigator: React.FC = () => {
           component={SettingsScreen}
           options={{
             title: t('navigation.settings'),
-            drawerIcon: ({ color }) => <Text style={styles.drawerIcon}>⚙️</Text>,
+            drawerIcon: () => <Text style={styles.drawerIcon}>⚙️</Text>,
           }}
         />
       </Drawer.Navigator>
@@ -140,50 +121,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   drawerHeader: {
-    marginBottom: MiyabiSpacing.sm,
-  },
-  headerGradient: {
     paddingTop: MiyabiSpacing.xl + 24,
     paddingBottom: MiyabiSpacing.lg,
-    paddingHorizontal: MiyabiSpacing.lg,
-    backgroundColor: MiyabiColors.bamboo,
-    flexDirection: 'row',
     alignItems: 'center',
-  },
-  logoContainer: {
-    marginRight: MiyabiSpacing.md,
-  },
-  headerTextBlock: {
-    flex: 1,
-  },
-  drawerAppName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: 0.3,
-    marginBottom: 6,
-  },
-  languagePill: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  languagePillText: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.9)',
-    fontWeight: '500',
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: MiyabiColors.divider,
+    marginBottom: MiyabiSpacing.sm,
   },
   navSection: {
     paddingTop: MiyabiSpacing.xs,
   },
   drawerIcon: {
-    fontSize: 20,
+    fontSize: 22,
   },
   drawerLabel: {
-    fontSize: 15,
-    fontWeight: '500',
+    fontSize: 17,
+    fontWeight: '600',
     marginLeft: -4,
   },
   drawerItem: {

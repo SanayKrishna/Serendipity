@@ -424,8 +424,8 @@ async def create_pin(
         # Create PostGIS POINT geometry
         point_wkt = f"SRID=4326;POINT({pin_data.lon} {pin_data.lat})"
         
-        # Clamp duration to prevent abuse: min 1h, max 168h (7 days)
-        expiry_hours = max(1, min(pin_data.duration_hours, 168))
+        # Clamp duration: min 1h, max 730h (1 month)
+        expiry_hours = max(1, min(pin_data.duration_hours, 730))
 
         # Create new pin
         new_pin = Pin(
@@ -565,14 +565,23 @@ async def like_pin(
         # Check suppression status after like count changes
         update_suppression_status(db, pin)
         
-        # Check for life extension milestones (3 or 6 likes)
-        if pin.likes == 3 or pin.likes == 6:
-            pin.expires_at = pin.expires_at + timedelta(hours=settings.LIKE_EXTENSION_HOURS)
-            extended = True
-            message = f"🎉 Pin liked! Lifespan extended by {settings.LIKE_EXTENSION_HOURS} hours (milestone: {pin.likes} likes)"
-            log_event("PIN_EXTENDED", "Pin lifespan extended", pin_id=pin_id, likes=pin.likes)
+        # ── Like-extension rule ─────────────────────────────────────────────
+        # Every new like pushes the expiry forward by exactly 7 days,
+        # capped at created_at + 1 year (hard limit).
+        ONE_YEAR = timedelta(days=365)
+        LIKE_BONUS = timedelta(days=7)
+        max_expiry = pin.created_at + ONE_YEAR
+        new_expiry = pin.expires_at + LIKE_BONUS
+        if new_expiry > max_expiry:
+            new_expiry = max_expiry
+        extended = new_expiry > pin.expires_at
+        if extended:
+            pin.expires_at = new_expiry
+            message = f"🎉 Pin liked! Lifespan extended by 7 days (now expires {pin.expires_at.strftime('%Y-%m-%d')})"
+            log_event("PIN_EXTENDED", "Pin lifespan extended by like", pin_id=pin_id, likes=pin.likes, expires_at=str(pin.expires_at))
         else:
-            message = f"👍 Pin liked! ({pin.likes} total likes)"
+            message = f"👍 Pin liked! (already at 1-year maximum — {pin.likes} total likes)"
+            log_event("PIN_LIKE", "Pin liked (at max lifespan)", pin_id=pin_id, likes=pin.likes)
         
         db.commit()
         db.refresh(pin)
