@@ -19,7 +19,8 @@ jobs:
       - name: Build backend Docker image
         run: |
           # Use plain progress so Action logs show full Docker output for easier debugging
-          docker build --progress=plain -f backend/Dockerfile -t serendipity-backend:ci .
+          # Use `backend` as the build context so the Dockerfile can COPY requirements.txt
+          docker build --progress=plain -f backend/Dockerfile -t serendipity-backend:ci backend
       - name: Smoke test container (non-fatal)
         run: |
           docker run --rm -d --name serendipity-backend-smoke -p 8000:8000 serendipity-backend:ci
