@@ -1,28 +1,37 @@
 /**
- * App Navigator - Drawer Navigation
+ * App Navigator - Auth + Drawer Navigation
  * 
- * Five main screens with hamburger menu:
+ * Auth Stack (if not logged in):
+ * - Sign Up
+ * - Login
+ * 
+ * Main Drawer (if logged in):
  * - Radar (Home) - Discover nearby messages
  * - Drop (Create) - Leave a message
  * - Community - Broadcast channel (admin can post)
  * - Diary - Personal discovery timeline
  * - Settings - Language and preferences
  */
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
+import { createStackNavigator } from '@react-navigation/stack';
 
 import RadarScreen from '../screens/RadarScreen';
 import DropScreen from '../screens/DropScreen';
 import CommunityScreen from '../screens/CommunityScreen';
 import DiaryScreen from '../screens/DiaryScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import SignUpScreen from '../screens/SignUpScreen';
+import LoginScreen from '../screens/LoginScreen';
 import { AppLogo } from '../components/AppLogo';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiShadows } from '../styles/miyabi';
 import { useTranslation } from 'react-i18next';
+import { authService } from '../services/AuthService';
 
 const Drawer = createDrawerNavigator();
+const Stack = createStackNavigator();
 
 // Custom Drawer Content with refined design
 const CustomDrawerContent = (props: any) => {
@@ -47,72 +56,153 @@ const CustomDrawerContent = (props: any) => {
   );
 };
 
-const AppNavigator: React.FC = () => {
+// Main Drawer Navigator (after authentication)
+const DrawerNavigator: React.FC = () => {
   const { t } = useTranslation();
   
   return (
-    <NavigationContainer>
-      <Drawer.Navigator
-        drawerContent={(props) => <CustomDrawerContent {...props} />}
-        screenOptions={{
-          headerShown: false,
-          drawerPosition: 'left',
-          drawerType: 'slide',
-          overlayColor: 'rgba(0, 0, 0, 0.4)',
-          drawerStyle: styles.drawer,
-          drawerActiveTintColor: MiyabiColors.bamboo,
-          drawerInactiveTintColor: MiyabiColors.sumiLight,
-          drawerLabelStyle: styles.drawerLabel,
-          drawerItemStyle: styles.drawerItem,
-          drawerActiveBackgroundColor: MiyabiColors.bamboo + '15',
+    <Drawer.Navigator
+      drawerContent={(props) => <CustomDrawerContent {...props} />}
+      screenOptions={{
+        headerShown: false,
+        drawerPosition: 'left',
+        drawerType: 'slide',
+        overlayColor: 'rgba(0, 0, 0, 0.4)',
+        drawerStyle: styles.drawer,
+        drawerActiveTintColor: MiyabiColors.bamboo,
+        drawerInactiveTintColor: MiyabiColors.sumiLight,
+        drawerLabelStyle: styles.drawerLabel,
+        drawerItemStyle: styles.drawerItem,
+        drawerActiveBackgroundColor: MiyabiColors.bamboo + '15',
+      }}
+    >
+      <Drawer.Screen
+        name="Radar"
+        component={RadarScreen}
+        options={{
+          title: t('navigation.radar'),
+          drawerIcon: () => <Text style={styles.drawerIcon}>🗺️</Text>,
         }}
-      >
-        <Drawer.Screen
-          name="Radar"
-          component={RadarScreen}
-          options={{
-            title: t('navigation.radar'),
-            drawerIcon: () => <Text style={styles.drawerIcon}>🗺️</Text>,
-          }}
+      />
+      <Drawer.Screen
+        name="Drop"
+        component={DropScreen}
+        options={{
+          title: t('navigation.dropPin'),
+          drawerIcon: () => <Text style={styles.drawerIcon}>📍</Text>,
+        }}
+      />
+      <Drawer.Screen
+        name="Community"
+        component={CommunityScreen}
+        options={{
+          title: t('navigation.community'),
+          drawerIcon: () => <Text style={styles.drawerIcon}>👥</Text>,
+        }}
+      />
+      <Drawer.Screen
+        name="Diary"
+        component={DiaryScreen}
+        options={{
+          title: t('navigation.diary'),
+          drawerIcon: () => <Text style={styles.drawerIcon}>📔</Text>,
+        }}
+      />
+      <Drawer.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          title: t('navigation.settings'),
+          drawerIcon: () => <Text style={styles.drawerIcon}>⚙️</Text>,
+        }}
+      />
+    </Drawer.Navigator>
+  );
+};
+
+const AppNavigator: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  useEffect(() => {
+    checkAuthStatus();
+  }, []);
+  
+  const checkAuthStatus = async () => {
+    try {
+      await authService.initialize();
+      // Check if user is authenticated via email/password
+      // If using device ID or Supabase anonymous, show main app directly
+      // If email authenticated, show main app
+      // If not authenticated (no stored session), show auth screens
+      const authType = authService.getAuthType();
+      
+      // For backwards compatibility: device and supabase auth go directly to main app
+      // Email auth requires login
+      if (authType === 'email' || authType === 'device' || authType === 'supabase') {
+        setIsAuthenticated(true);
+      } else {
+        setIsAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Auth check error:', error);
+      setIsAuthenticated(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const handleAuthSuccess = () => {
+    setIsAuthenticated(true);
+  };
+  
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <AppLogo size="large" />
+        <ActivityIndicator
+          size="large"
+          color={MiyabiColors.bamboo}
+          style={{ marginTop: MiyabiSpacing.xl }}
         />
-        <Drawer.Screen
-          name="Drop"
-          component={DropScreen}
-          options={{
-            title: t('navigation.dropPin'),
-            drawerIcon: () => <Text style={styles.drawerIcon}>📍</Text>,
+      </View>
+    );
+  }
+  
+  return (
+    <NavigationContainer>
+      {isAuthenticated ? (
+        <DrawerNavigator />
+      ) : (
+        <Stack.Navigator
+          screenOptions={{
+            headerShown: false,
+            cardStyle: { backgroundColor: MiyabiColors.washi },
           }}
-        />
-        <Drawer.Screen
-          name="Community"
-          component={CommunityScreen}
-          options={{
-            title: t('navigation.community'),
-            drawerIcon: () => <Text style={styles.drawerIcon}>👥</Text>,
-          }}
-        />
-        <Drawer.Screen
-          name="Diary"
-          component={DiaryScreen}
-          options={{
-            title: t('navigation.diary'),
-            drawerIcon: () => <Text style={styles.drawerIcon}>📔</Text>,
-          }}
-        />
-        <Drawer.Screen
-          name="Settings"
-          component={SettingsScreen}
-          options={{
-            title: t('navigation.settings'),
-            drawerIcon: () => <Text style={styles.drawerIcon}>⚙️</Text>,
-          }}
-        />
-      </Drawer.Navigator>
+        >
+          <Stack.Screen name="Login">
+            {(props) => (
+              <LoginScreen {...props} onLoginSuccess={handleAuthSuccess} />
+            )}
+          </Stack.Screen>
+          <Stack.Screen name="SignUp">
+            {(props) => (
+              <SignUpScreen {...props} onSignUpSuccess={handleAuthSuccess} />
+            )}
+          </Stack.Screen>
+        </Stack.Navigator>
+      )}
     </NavigationContainer>
   );
 };
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: MiyabiColors.washi,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   drawer: {
     backgroundColor: MiyabiColors.washi,
     width: 280,

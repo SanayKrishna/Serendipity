@@ -8,6 +8,28 @@ from geoalchemy2 import Geometry
 from app.database import Base
 
 
+class User(Base):
+    """
+    User Model - Email/Password authenticated users.
+    
+    Users can create an account with username, email, and password.
+    Each user can link to a device for backwards compatibility.
+    """
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    username = Column(String(15), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    profile_icon = Column(String(50), default='explorer_01', nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_login = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    def __repr__(self):
+        return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
+
+
 class Device(Base):
     """
     Device Model - User identification (supports both device ID and Supabase Auth).
@@ -23,6 +45,7 @@ class Device(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     device_id = Column(String(64), unique=True, nullable=False, index=True)
     auth_type = Column(String(20), default='device', nullable=False)  # 'device' or 'supabase'
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)  # Link to authenticated user
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

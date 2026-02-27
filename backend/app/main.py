@@ -28,7 +28,7 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from app.database import get_db
-from app.models import Pin, Device, PinInteraction
+from app.models import Pin, Device, PinInteraction, User
 from app.schemas import (
     PinCreate, 
     PinResponse, 
@@ -39,11 +39,22 @@ from app.schemas import (
     CleanupResponse,
     UserStatsResponse,
     PinStatsResponse,
+    UsernameCheckRequest,
+    UsernameCheckResponse,
+    SignUpRequest,
+    LoginRequest,
+    AuthResponse,
 )
 from app.config import settings
 from app.utils.content_filter import validate_content
 from app.utils.rate_limiter import limiter, RATE_LIMITS
 from app.utils.logging_middleware import RequestLoggingMiddleware, log_event, log_error
+
+# Password hashing
+from passlib.context import CryptContext
+import secrets
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ============================================
 # SENTRY ERROR MONITORING (no-op if DSN not set)
@@ -255,6 +266,156 @@ async def health_check_fast():
     Returns 200 as long as the process is alive.
     """
     return MessageResponse(message="API is alive", success=True)
+
+
+# ============================================
+# AUTHENTICATION ENDPOINTS
+# ============================================
+
+def generate_token() -> str:
+    """Generate a simple session token (32 bytes hex)"""
+    return secrets.token_hex(32)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    """Hash a password for storage"""
+    return pwd_context.hash(password)
+
+
+@app.post("/auth/check-username", response_model=UsernameCheckResponse, tags=["Authentication"])
+async def check_username(request: UsernameCheckRequest, db: Session = Depends(get_db)):
+    """
+    🔍 Check if a username is available.
+    Used for real-time validation during sign up.
+    """
+    try:
+        existing_user = db.query(User).filter(User.username == request.username.lower()).first()
+        
+        if existing_user:
+            return UsernameCheckResponse(
+                available=False,
+                message=f"Username '{request.username}' is already taken"
+            )
+        
+        return UsernameCheckResponse(
+            available=True,
+            message=f"Username '{request.username}' is available"
+        )
+    except Exception as e:
+        log_error("USERNAME_CHECK", f"Failed to check username: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to check username: {str(e)}")
+
+
+@app.post("/auth/signup", response_model=AuthResponse, tags=["Authentication"])
+async def signup(request: SignUpRequest, db: Session = Depends(get_db)):
+    """
+    📝 Create a new user account.
+    
+    - **email**: Valid email address
+    - **username**: Unique username (3-15 chars, lowercase alphanumeric)
+    - **password**: Secure password (min 8 characters)
+    - **profile_icon**: Selected profile icon ID (default: explorer_01)
+    """
+    try:
+        # Check if username already exists
+        existing_user = db.query(User).filter(User.username == request.username.lower()).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username already exists")
+        
+        # Check if email already exists
+        existing_email = db.query(User).filter(User.email == request.email.lower()).first()
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create new user
+        password_hash = get_password_hash(request.password)
+        new_user = User(
+            username=request.username.lower(),
+            email=request.email.lower(),
+            password_hash=password_hash,
+            profile_icon=request.profile_icon,
+            created_at=datetime.utcnow(),
+            last_login=datetime.utcnow(),
+            is_active=True
+        )
+        
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        # Generate session token
+        token = generate_token()
+        
+        log_event("SIGNUP", f"New user created: {new_user.username}", user_id=new_user.id)
+        
+        return AuthResponse(
+            user_id=new_user.id,
+            username=new_user.username,
+            email=new_user.email,
+            profile_icon=new_user.profile_icon,
+            token=token,
+            message="Account created successfully"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        log_error("SIGNUP", f"Failed to create user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create account: {str(e)}")
+
+
+@app.post("/auth/login", response_model=AuthResponse, tags=["Authentication"])
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """
+    🔐 Login with username or email.
+    
+    - **identifier**: Username or email address
+    - **password**: User's password
+    """
+    try:
+        # Check if identifier is email or username
+        identifier = request.identifier.lower()
+        
+        # Try to find user by email first (contains @)
+        if '@' in identifier:
+            user = db.query(User).filter(User.email == identifier).first()
+        else:
+            user = db.query(User).filter(User.username == identifier).first()
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid username/email or password")
+        
+        # Verify password
+        if not verify_password(request.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid username/email or password")
+        
+        # Update last login
+        user.last_login = datetime.utcnow()
+        db.commit()
+        
+        # Generate session token
+        token = generate_token()
+        
+        log_event("LOGIN", f"User logged in: {user.username}", user_id=user.id)
+        
+        return AuthResponse(
+            user_id=user.id,
+            username=user.username,
+            email=user.email,
+            profile_icon=user.profile_icon,
+            token=token,
+            message="Login successful"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_error("LOGIN", f"Login failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
 # ============================================

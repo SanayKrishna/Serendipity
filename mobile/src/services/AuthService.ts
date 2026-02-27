@@ -13,6 +13,7 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SUPABASE_CONFIG, isSupabaseConfigured } from '../config/supabase';
+import { getAuthApiUrl } from '../config/api';
 
 // ============================================
 // TYPES
@@ -20,8 +21,12 @@ import { SUPABASE_CONFIG, isSupabaseConfigured } from '../config/supabase';
 
 export interface AuthUser {
   id: string;           // The user/device ID to send to backend
-  authType: 'supabase' | 'device';  // How they're authenticated
+  authType: 'supabase' | 'device' | 'email';  // How they're authenticated
   isAnonymous: boolean; // True for both anonymous and device-based
+  email?: string;       // Email (if authenticated via email/password)
+  username?: string;    // Username (if authenticated via email/password)
+  profileIcon?: string; // Profile icon ID
+  token?: string;       // Session token (for email/password auth)
 }
 
 // ============================================
@@ -30,6 +35,8 @@ export interface AuthUser {
 
 const DEVICE_ID_KEY = 'serendipity_device_id';
 const SUPABASE_USER_KEY = 'serendipity_supabase_user';
+const EMAIL_AUTH_USER_KEY = 'serendipity_email_user';
+const EMAIL_AUTH_TOKEN_KEY = 'serendipity_email_token';
 
 function getStorageItem(key: string): string | null {
   try {
@@ -118,6 +125,13 @@ class AuthService {
   }
 
   private async _doInitialize(): Promise<AuthUser> {
+    // Try email/password auth first (check for stored session)
+    const storedUser = await this._initEmailAuth();
+    if (storedUser) {
+      this.currentUser = storedUser;
+      return storedUser;
+    }
+
     // Try Supabase first if configured
     if (isSupabaseConfigured()) {
       const supabaseUser = await this._initSupabase();
@@ -131,6 +145,35 @@ class AuthService {
     const deviceUser = this._initDeviceId();
     this.currentUser = deviceUser;
     return deviceUser;
+  }
+
+  /**
+   * Initialize Email/Password Auth (check for stored session)
+   */
+  private async _initEmailAuth(): Promise<AuthUser | null> {
+    try {
+      const storedUserJson = await AsyncStorage.getItem(EMAIL_AUTH_USER_KEY);
+      const storedToken = await AsyncStorage.getItem(EMAIL_AUTH_TOKEN_KEY);
+
+      if (storedUserJson && storedToken) {
+        const userData = JSON.parse(storedUserJson);
+        console.log('🔐 Email auth session restored:', userData.username);
+        return {
+          id: userData.user_id,
+          authType: 'email',
+          isAnonymous: false,
+          email: userData.email,
+          username: userData.username,
+          profileIcon: userData.profile_icon,
+          token: storedToken,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.log('📱 Email auth restore failed:', error);
+      return null;
+    }
   }
 
   /**
@@ -230,7 +273,7 @@ class AuthService {
   /**
    * Get auth type for debugging
    */
-  getAuthType(): 'supabase' | 'device' | 'none' {
+  getAuthType(): 'supabase' | 'device' | 'email' | 'none' {
     return this.currentUser?.authType ?? 'none';
   }
 
@@ -270,6 +313,130 @@ class AuthService {
   }
 
   /**
+   * Sign up with email/password
+   */
+  async signup(
+    email: string,
+    username: string,
+    password: string,
+    profileIcon: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const apiUrl = getAuthApiUrl();
+      const response = await fetch(`${apiUrl}/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.toLowerCase(),
+          username: username.toLowerCase(),
+          password,
+          profile_icon: profileIcon,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        return { success: false, error: errorData.detail || 'Sign up failed' };
+      }
+
+      const data = await response.json();
+
+      // Store user data and token
+      await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify({
+        user_id: data.user_id,
+        email: data.email,
+        username: data.username,
+        profile_icon: data.profile_icon,
+      }));
+      await AsyncStorage.setItem(EMAIL_AUTH_TOKEN_KEY, data.token);
+
+      // Update current user
+      this.currentUser = {
+        id: data.user_id,
+        authType: 'email',
+        isAnonymous: false,
+        email: data.email,
+        username: data.username,
+        profileIcon: data.profile_icon,
+        token: data.token,
+      };
+
+      console.log('✅ Sign up successful:', data.username);
+      return { success: true };
+    } catch (error: any) {
+      console.error('❌ Sign up error:', error);
+      return { success: false, error: error.message || 'Network error' };
+    }
+  }
+
+  /**
+   * Login with username or email
+   */
+  async login(
+    identifier: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const apiUrl = getAuthApiUrl();
+      const response = await fetch(`${apiUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: identifier.toLowerCase(),
+          password,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        return { success: false, error: errorData.detail || 'Login failed' };
+      }
+
+      const data = await response.json();
+
+      // Store user data and token
+      await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify({
+        user_id: data.user_id,
+        email: data.email,
+        username: data.username,
+        profile_icon: data.profile_icon,
+      }));
+      await AsyncStorage.setItem(EMAIL_AUTH_TOKEN_KEY, data.token);
+
+      // Update current user
+      this.currentUser = {
+        id: data.user_id,
+        authType: 'email',
+        isAnonymous: false,
+        email: data.email,
+        username: data.username,
+        profileIcon: data.profile_icon,
+        token: data.token,
+      };
+
+      console.log('✅ Login successful:', data.username);
+      return { success: true };
+    } catch (error: any) {
+      console.error('❌ Login error:', error);
+      return { success: false, error: error.message || 'Network error' };
+    }
+  }
+
+  /**
+   * Check if user is authenticated via email/password
+   */
+  isEmailAuthenticated(): boolean {
+    return this.currentUser?.authType === 'email' && !this.currentUser.isAnonymous;
+  }
+
+  /**
+   * Get auth token (for email/password auth)
+   */
+  getAuthToken(): string | null {
+    return this.currentUser?.token || null;
+  }
+
+  /**
    * Sign out (for testing)
    */
   async signOut(): Promise<void> {
@@ -278,6 +445,10 @@ class AuthService {
       if (client) {
         await client.auth.signOut();
       }
+    } else if (this.currentUser?.authType === 'email') {
+      // Clear email auth data
+      await AsyncStorage.removeItem(EMAIL_AUTH_USER_KEY);
+      await AsyncStorage.removeItem(EMAIL_AUTH_TOKEN_KEY);
     }
     this.currentUser = null;
     this.initPromise = null;

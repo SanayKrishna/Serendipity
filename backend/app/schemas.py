@@ -2,8 +2,65 @@
 Pydantic Schemas for API Request/Response validation
 """
 from datetime import datetime
-from typing import List
-from pydantic import BaseModel, Field
+from typing import List, Optional
+from pydantic import BaseModel, Field, EmailStr, field_validator
+
+
+# ============================================
+# AUTH SCHEMAS
+# ============================================
+
+class UsernameCheckRequest(BaseModel):
+    """Schema for username availability check"""
+    username: str = Field(..., min_length=3, max_length=15, description="Username to check")
+    
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, v):
+        if not v.islower():
+            raise ValueError('Username must be lowercase')
+        if not v.isalnum():
+            raise ValueError('Username must be alphanumeric')
+        return v
+
+
+class UsernameCheckResponse(BaseModel):
+    """Schema for username availability response"""
+    available: bool
+    message: str
+
+
+class SignUpRequest(BaseModel):
+    """Schema for user sign up"""
+    email: EmailStr
+    username: str = Field(..., min_length=3, max_length=15, description="Unique username")
+    password: str = Field(..., min_length=8, description="Password (min 8 characters)")
+    profile_icon: str = Field(default='explorer_01', description="Selected profile icon ID")
+    
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, v):
+        if not v.islower():
+            raise ValueError('Username must be lowercase')
+        if not v.isalnum():
+            raise ValueError('Username must be alphanumeric')
+        return v
+
+
+class LoginRequest(BaseModel):
+    """Schema for user login"""
+    identifier: str = Field(..., description="Username or email")
+    password: str = Field(..., description="Password")
+
+
+class AuthResponse(BaseModel):
+    """Schema for authentication response"""
+    user_id: int
+    username: str
+    email: str
+    profile_icon: str
+    token: str = Field(..., description="JWT token or session ID")
+    message: str
 
 
 # ============================================

@@ -101,8 +101,17 @@ export const API_CONFIG = {
     DISLIKE: (id: number) => `/pin/${id}/dislike`,
     ALL_PINS: '/pins/all',
     HEALTH: '/health',
+    // Auth endpoints (always use tunnel URL for auth)
+    CHECK_USERNAME: '/auth/check-username',
+    SIGNUP: '/auth/signup',
+    LOGIN: '/auth/login',
   },
   DISCOVERY_RADIUS: 50,
   HEARTBEAT_INTERVAL: 10000,
   DISTANCE_THRESHOLD: 20,
 };
+
+/**
+ * Get auth API URL (always uses the public Railway URL)
+ */
+export const getAuthApiUrl = (): string => TUNNEL_URL;
