@@ -6,7 +6,7 @@ name: Keep Railway Backend Warm
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # every 10 minutes, 24/7
+    - cron: '*/5 * * * *'   # every 5 minutes, 24/7 (keeps Railway pinged more frequently)
   workflow_dispatch:          # allows manual trigger from GitHub Actions UI
 
 jobs:
