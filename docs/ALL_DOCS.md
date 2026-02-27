@@ -132,3 +132,117 @@ If you want these removed completely, delete them from this directory.
 ## archive/algorithn.md
 
 <archived file preserved>
+
+---
+
+## TEST_CHECKLIST.md
+
+# Test Checklist — Safe Verification Commands
+
+Run these commands anytime to verify app health **without breaking existing functionality**.
+
+---
+
+## ✅ Completed Checks (Feb 21, 2026)
+
+### 1. TypeScript Type Check
+```powershell
+cd mobile
+npx tsc --noEmit
+```
+**Status:** ✅ PASSED (0 errors)
+
+### 2. Expo Health Check
+```powershell
+cd mobile
+npx expo-doctor
+```
+**Status:** ⚠️ WARNINGS ONLY (5 package version mismatches — documented below, not blocking)
+
+### 3. Dependencies Installed
+```powershell
+cd mobile
+npm list --depth=0
+```
+**Status:** ✅ ALL INSTALLED (no unmet peer dependencies)
+
+### 4. Backend Database Connectivity
+```powershell
+cd backend
+python app\run_migration.py
+```
+**Status:** ✅ CONNECTED (Supabase transaction pooler verified)
+
+### 5. Supabase Migrations
+**Status:** ✅ ALL APPLIED (migrations 002-005 in production DB)
+
+---
+
+## SUPABASE_SETUP_GUIDE.md
+
+# Supabase Setup Guide for Serendipity SNS
+
+## ✅ What I've Done For You (On Your Laptop)
+
+1. **Installed packages** in `mobile/` folder:
+  - `@supabase/supabase-js` - Supabase client library
+  - `@react-native-async-storage/async-storage` - Stores user session on phone
+  - `react-native-url-polyfill` - Makes URLs work properly
+  - `react-native-get-random-values` - Generates secure random IDs
+
+2. **Added polyfills** to `App.tsx` (top of file)
+  - These make Supabase work on React Native
+
+3. **Updated AuthService** to use AsyncStorage
+  - User sessions will persist when app closes/reopens
+
+## SUPABASE_MIGRATION_GUIDE.md
+
+# Supabase Migration Guide (Beginner-Friendly)
+
+This guide shows you exactly how to apply the `005_passes_by_and_duration` database migration.
+
+---
+
+## README.md (root)
+
+# Serendipity SNS
+
+Mobile + backend project for serendipitous local pins.
+
+Run locally:
+
+Backend:
+```powershell
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+Mobile (Expo):
+```powershell
+cd mobile
+npx expo start --lan --clear
+```
+
+## NETWORK_SETUP_GUIDE.md
+
+# Network Setup Guide - Mobile Data Connectivity
+
+## Problem
+Your backend runs on `http://192.168.1.32:8000` (local WiFi IP). When your phone switches to mobile data, it can't reach this address because:
+- Local IPs (192.168.x.x) only work within the same WiFi network
+- Mobile data connects through your carrier's network, not your home network
+
+## HOW_APP_IS_RUNNING.md
+
+# 🚀 How the App is Currently Running
+
+... (session details, terminal commands, run instructions, and network setup)
+
+## GPS_TESTING_GUIDE.md
+
+# 🧪 GPS & 50m Constraint Testing Guide
+
+... (testing steps for GPS, discovery radius, pin creation, performance tests, debugging tips)
+
