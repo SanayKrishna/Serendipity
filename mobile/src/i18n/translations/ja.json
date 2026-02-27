@@ -218,6 +218,30 @@
     "languageDescription": "お好みの言語を選択してください",
     "appDescription": "位置情報で新しい出会いを",
     "english": "English",
-    "japanese": "日本語"
+    "japanese": "日本語",
+    "logout": "ログアウト",
+    "cancel": "キャンセル",
+    "logoutConfirm": "ログアウトしてもよろしいですか？",
+    "logoutConfirmBtn": "はい、ログアウト"
+  },
+  "auth": {
+    "welcomeBack": "おかえりなさい",
+    "continueExploration": "探索を続けましょう",
+    "signIn": "ログイン",
+    "newExplorer": "初めての方？ ",
+    "createAccount": "アカウントを作成",
+    "continueAsGuest": "ゲストとして続ける",
+    "usernameOrEmail": "ユーザー名またはメール",
+    "password": "パスワード",
+    "joinJourney": "冒険に参加しよう",
+    "createIdentity": "あなたの探索者アイデンティティを作成",
+    "email": "メールアドレス",
+    "username": "ユーザー名",
+    "chooseIcon": "アイコンを選択",
+    "alreadyHaveAccount": "すでにアカウントをお持ちですか？ ",
+    "enterCredentials": "認証情報を入力してください",
+    "fillAllFields": "すべてのフィールドを入力してください",
+    "usernameTaken": "ユーザー名は使用済みです",
+    "passwordTooLong": "パスワードが長すぎます — 64文字以内にしてください"
   }
 }

@@ -12,7 +12,7 @@
  * - Diary - Personal discovery timeline
  * - Settings - Language and preferences
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, createContext } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
@@ -28,10 +28,16 @@ import LoginScreen from '../screens/LoginScreen';
 import { AppLogo } from '../components/AppLogo';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiShadows } from '../styles/miyabi';
 import { useTranslation } from 'react-i18next';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authService } from '../services/AuthService';
 
 const Drawer = createDrawerNavigator();
 const Stack = createStackNavigator();
+
+/** Auth context — lets any screen trigger a global logout without navigation.navigate */
+export const AuthContext = createContext<{
+  logout: () => Promise<void>;
+}>({ logout: async () => {} });
 
 // Custom Drawer Content with refined design
 const CustomDrawerContent = (props: any) => {
@@ -131,18 +137,20 @@ const AppNavigator: React.FC = () => {
   const checkAuthStatus = async () => {
     try {
       await authService.initialize();
-      // Check if user is authenticated via email/password
-      // If using device ID or Supabase anonymous, show main app directly
-      // If email authenticated, show main app
-      // If not authenticated (no stored session), show auth screens
       const authType = authService.getAuthType();
       
-      // For backwards compatibility: device and supabase auth go directly to main app
-      // Email auth requires login
-      if (authType === 'email' || authType === 'device' || authType === 'supabase') {
+      // Only skip auth screens if user has a real email session
+      // OR explicitly chose "Continue as Guest" (persisted flag)
+      if (authType === 'email') {
         setIsAuthenticated(true);
       } else {
-        setIsAuthenticated(false);
+        // Check if user previously chose "Continue as Guest"
+        const guestFlag = await AsyncStorage.getItem('serendipity_guest_mode');
+        if (guestFlag === 'true') {
+          setIsAuthenticated(true);
+        } else {
+          setIsAuthenticated(false);
+        }
       }
     } catch (error) {
       console.error('Auth check error:', error);
@@ -153,6 +161,27 @@ const AppNavigator: React.FC = () => {
   };
   
   const handleAuthSuccess = () => {
+    setIsAuthenticated(true);
+  };
+
+  /** Full logout: clear session + guest flag, reset auth state.
+   *  The conditional <NavigationContainer> automatically unmounts the app
+   *  and shows the auth stack — no navigation.navigate needed. */
+  const handleLogout = async () => {
+    try {
+      await authService.signOut();
+      await AsyncStorage.removeItem('serendipity_guest_mode');
+    } catch (e) {
+      console.error('Logout error:', e);
+    }
+    setIsAuthenticated(false);
+  };
+
+  const handleGuestContinue = async () => {
+    // Persist guest choice so the user isn't asked again on next launch
+    await AsyncStorage.setItem('serendipity_guest_mode', 'true');
+    // Ensure device/supabase auth is initialized for API calls
+    await authService.initialize();
     setIsAuthenticated(true);
   };
   
@@ -172,7 +201,9 @@ const AppNavigator: React.FC = () => {
   return (
     <NavigationContainer>
       {isAuthenticated ? (
-        <DrawerNavigator />
+        <AuthContext.Provider value={{ logout: handleLogout }}>
+          <DrawerNavigator />
+        </AuthContext.Provider>
       ) : (
         <Stack.Navigator
           screenOptions={{
@@ -182,7 +213,7 @@ const AppNavigator: React.FC = () => {
         >
           <Stack.Screen name="Login">
             {(props) => (
-              <LoginScreen {...props} onLoginSuccess={handleAuthSuccess} />
+              <LoginScreen {...props} onLoginSuccess={handleAuthSuccess} onGuestContinue={handleGuestContinue} />
             )}
           </Stack.Screen>
           <Stack.Screen name="SignUp">

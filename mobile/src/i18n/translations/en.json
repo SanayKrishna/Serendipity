@@ -220,6 +220,30 @@
     "languageDescription": "Choose your preferred language",
     "appDescription": "Location-based discovery",
     "english": "English",
-    "japanese": "日本語"
+    "japanese": "日本語",
+    "logout": "Log Out",
+    "cancel": "Cancel",
+    "logoutConfirm": "Are you sure you want to log out?",
+    "logoutConfirmBtn": "Yes, Log Out"
+  },
+  "auth": {
+    "welcomeBack": "Welcome Back",
+    "continueExploration": "Continue your exploration",
+    "signIn": "Sign In",
+    "newExplorer": "New explorer? ",
+    "createAccount": "Create Account",
+    "continueAsGuest": "Continue as Guest",
+    "usernameOrEmail": "Username or Email",
+    "password": "Password",
+    "joinJourney": "Join the Journey",
+    "createIdentity": "Create your explorer identity",
+    "email": "Email",
+    "username": "Username",
+    "chooseIcon": "Choose Your Icon",
+    "alreadyHaveAccount": "Already have an account? ",
+    "enterCredentials": "Please enter your credentials",
+    "fillAllFields": "Please fill in all fields",
+    "usernameTaken": "Username taken",
+    "passwordTooLong": "Password is too long — please keep it under 64 characters"
   }
 }

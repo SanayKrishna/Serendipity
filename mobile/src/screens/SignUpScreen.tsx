@@ -25,20 +25,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiTypography, MiyabiShadows } from '../styles/miyabi';
 import { AppLogo } from '../components/AppLogo';
 import { getAuthApiUrl } from '../config/api';
-
-// Profile icons (IDs that match backend)
-const PROFILE_ICONS = [
-  { id: 'explorer_01', emoji: '🧭', label: 'Explorer' },
-  { id: 'fox_02', emoji: '🦊', label: 'Fox' },
-  { id: 'owl_03', emoji: '🦉', label: 'Owl' },
-  { id: 'compass_04', emoji: '🧭', label: 'Compass' },
-  { id: 'map_05', emoji: '🗺️', label: 'Map' },
-  { id: 'telescope_06', emoji: '🔭', label: 'Telescope' },
-  { id: 'lantern_07', emoji: '🏮', label: 'Lantern' },
-  { id: 'key_08', emoji: '🗝️', label: 'Key' },
-  { id: 'gem_09', emoji: '💎', label: 'Gem' },
-  { id: 'star_10', emoji: '⭐', label: 'Star' },
-];
+import authService from '../services/AuthService';
+import { PROFILE_ICON_DEFS } from '../components/ProfileIcons';
+import { useTranslation } from 'react-i18next';
 
 interface SignUpScreenProps {
   navigation: any;
@@ -46,10 +35,11 @@ interface SignUpScreenProps {
 }
 
 const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess }) => {
+  const { t, i18n } = useTranslation();
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedIcon, setSelectedIcon] = useState('explorer_01');
+  const [selectedIcon, setSelectedIcon] = useState(PROFILE_ICON_DEFS[0].id);
   
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
   const [usernameChecking, setUsernameChecking] = useState(false);
@@ -111,7 +101,7 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
     
     // Validation
     if (!email || !username || !password) {
-      setError('Please fill in all fields');
+      setError(t('auth.fillAllFields'));
       return;
     }
     
@@ -126,7 +116,7 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
     }
     
     if (!usernameAvailable) {
-      setError('Username is not available');
+      setError(t('auth.usernameTaken') || 'Username is not available');
       return;
     }
     
@@ -134,31 +124,37 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
       setError('Password must be at least 8 characters');
       return;
     }
+
+    // Strip ALL invisible Unicode format/control characters that Android keyboards
+    // inject inside the password (zero-width spaces \u200B, word joiners \u2060,
+    // soft hyphens \u00AD, BOM \uFEFF, etc.) — trim() only removes edge whitespace
+    // and misses chars injected in the MIDDLE of the string.
+    const rawPassword = password
+      .replace(/\p{Cf}/gu, '')        // Unicode Format chars (invisible, zero-width)
+      .replace(/[\x00-\x1F\x7F]/g, '') // ASCII control chars
+      .trim();
+
+    // No length limit — backend uses SHA-256 pre-hashing before bcrypt,
+    // so any password length is accepted.
     
     setIsLoading(true);
     
     try {
-      const response = await fetch(`${getAuthApiUrl()}/auth/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.toLowerCase(),
-          username: username.toLowerCase(),
-          password,
-          profile_icon: selectedIcon,
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Sign up failed');
+      const result = await authService.signup(
+        email,
+        username,
+        rawPassword,
+        selectedIcon,
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || 'Sign up failed');
       }
-      
-      const data = await response.json();
-      
-      // Call success callback with user data
-      onSignUpSuccess(data);
-      
+
+      // authService.signup() persists the session; fetch the current user
+      const user = authService.getUser();
+      onSignUpSuccess(user);
+
     } catch (err: any) {
       setError(err.message || 'Failed to create account');
     } finally {
@@ -191,15 +187,15 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
           {/* Logo */}
           <View style={styles.logoContainer}>
             <AppLogo size="large" />
-            <Text style={styles.title}>Join the Journey</Text>
-            <Text style={styles.subtitle}>Create your explorer identity</Text>
+            <Text style={styles.title}>{t('auth.joinJourney')}</Text>
+            <Text style={styles.subtitle}>{t('auth.createIdentity')}</Text>
           </View>
           
           {/* Form */}
           <View style={styles.form}>
             {/* Email */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email</Text>
+              <Text style={styles.label}>{t('auth.email')}</Text>
               <TextInput
                 style={styles.input}
                 value={email}
@@ -215,7 +211,7 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
             
             {/* Username */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Username</Text>
+              <Text style={styles.label}>{t('auth.username')}</Text>
               <View style={styles.inputWithIndicator}>
                 <TextInput
                   style={[styles.input, { paddingRight: 40 }]}
@@ -246,7 +242,7 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
             
             {/* Password */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Password</Text>
+              <Text style={styles.label}>{t('auth.password')}</Text>
               <TextInput
                 style={styles.input}
                 value={password}
@@ -277,24 +273,31 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
             
             {/* Profile Icon Selection */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Choose Your Icon</Text>
+              <Text style={styles.label}>{t('auth.chooseIcon')}</Text>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.iconScroll}
               >
-                {PROFILE_ICONS.map((icon) => (
-                  <TouchableOpacity
-                    key={icon.id}
-                    style={[
-                      styles.iconOption,
-                      selectedIcon === icon.id && styles.iconOptionSelected,
-                    ]}
-                    onPress={() => setSelectedIcon(icon.id)}
-                  >
-                    <Text style={styles.iconEmoji}>{icon.emoji}</Text>
-                  </TouchableOpacity>
-                ))}
+                {PROFILE_ICON_DEFS.map((icon) => {
+                  const isSelected = selectedIcon === icon.id;
+                  return (
+                    <TouchableOpacity
+                      key={icon.id}
+                      style={[
+                        styles.iconOption,
+                        isSelected && styles.iconOptionSelected,
+                      ]}
+                      onPress={() => setSelectedIcon(icon.id)}
+                      accessibilityLabel={icon.label}
+                    >
+                      <icon.Component
+                        size={28}
+                        color={isSelected ? MiyabiColors.bamboo : MiyabiColors.sumiLight}
+                      />
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </View>
             
@@ -310,17 +313,27 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
               {isLoading ? (
                 <ActivityIndicator color={MiyabiColors.washi} />
               ) : (
-                <Text style={styles.submitButtonText}>Create Account</Text>
+                <Text style={styles.submitButtonText}>{t('auth.createAccount')}</Text>
               )}
             </TouchableOpacity>
             
             {/* Switch to login */}
             <View style={styles.switchContainer}>
-              <Text style={styles.switchText}>Already have an account? </Text>
+              <Text style={styles.switchText}>{t('auth.alreadyHaveAccount')}</Text>
               <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-                <Text style={styles.switchLink}>Sign In</Text>
+                <Text style={styles.switchLink}>{t('auth.signIn')}</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Language Toggle — footer */}
+            <TouchableOpacity
+              style={styles.langToggle}
+              onPress={() => i18n.changeLanguage(i18n.language === 'en' ? 'ja' : 'en')}
+            >
+              <Text style={[styles.langCode, i18n.language === 'en' && styles.langActive]}>EN</Text>
+              <Text style={styles.langSep}> | </Text>
+              <Text style={[styles.langCode, i18n.language === 'ja' && styles.langActive]}>JP</Text>
+            </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -482,6 +495,26 @@ const styles = StyleSheet.create({
     fontSize: MiyabiTypography.fontSize.sm,
     fontWeight: MiyabiTypography.fontWeight.semibold,
     color: MiyabiColors.bamboo,
+  },
+  langToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: MiyabiSpacing.xl,
+    paddingBottom: MiyabiSpacing.md,
+  },
+  langCode: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: MiyabiColors.sumiLight,
+    letterSpacing: 0.5,
+  },
+  langActive: {
+    color: MiyabiColors.bamboo,
+  },
+  langSep: {
+    fontSize: 12,
+    color: MiyabiColors.divider,
   },
 });
 

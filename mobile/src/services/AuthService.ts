@@ -323,13 +323,20 @@ class AuthService {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const apiUrl = getAuthApiUrl();
+      // Strip ALL invisible Unicode format/control characters that mobile keyboards
+      // inject (zero-width spaces, word joiners, soft hyphens, BOM, etc.).
+      // trim() only removes edge whitespace and misses chars injected in the middle.
+      const trimmedPassword = password
+        .replace(/\p{Cf}/gu, '')        // Unicode Format category (invisible chars)
+        .replace(/[\x00-\x1F\x7F]/g, '') // ASCII control chars
+        .trim();
       const response = await fetch(`${apiUrl}/auth/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: email.toLowerCase(),
-          username: username.toLowerCase(),
-          password,
+          email: email.toLowerCase().trim(),
+          username: username.toLowerCase().trim(),
+          password: trimmedPassword,
           profile_icon: profileIcon,
         }),
       });
@@ -378,12 +385,18 @@ class AuthService {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const apiUrl = getAuthApiUrl();
+      // Same invisible-char cleaning used at signup — must be identical so the
+      // hashed value at login matches the one stored during signup.
+      const trimmedPassword = password
+        .replace(/\p{Cf}/gu, '')        // Unicode Format category (invisible chars)
+        .replace(/[\x00-\x1F\x7F]/g, '') // ASCII control chars
+        .trim();
       const response = await fetch(`${apiUrl}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          identifier: identifier.toLowerCase(),
-          password,
+          identifier: identifier.toLowerCase().trim(),
+          password: trimmedPassword,
         }),
       });
 

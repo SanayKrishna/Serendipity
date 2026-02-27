@@ -8,7 +8,7 @@
  * - Detailed bottom sheet for selected pins
  * - List/Map view toggle
  */
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ import {
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Circle, Line } from 'react-native-svg';
 import * as Location from 'expo-location';
 import { useFocusEffect } from '@react-navigation/native';
 import { COMMUNITY_FILTER_KEY } from './CommunityScreen';
@@ -42,6 +43,9 @@ const FOG_STORAGE_KEY = 'serendipity_fog_circles';
 const INTERACTIONS_KEY = 'serendipity_pin_interactions';
 // Minimum distance (metres) between consecutive fog circles
 const FOG_CIRCLE_STRIDE = 15;
+
+// Heading smoothing: exponential moving average alpha (lower = smoother)
+const HEADING_SMOOTHING = 0.15;
 
 // How close two fog-circle centres can be before we skip adding a duplicate
 const haversineMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -636,6 +640,11 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   // Fog of war
   const [exploredCircles, setExploredCircles] = useState<ExploredCircle[]>([]);
   const lastFogCircleRef = useRef<ExploredCircle | null>(null);
+  // Smoothed heading for compass pointer (EMA-filtered)
+  const smoothedHeadingRef = useRef<number | null>(null);
+  // Camera-panned pin discovery (hex clouds in distant areas)
+  const [cameraPins, setCameraPins] = useState<MapPin[]>([]);
+  const lastCameraFetchRef = useRef<number>(0);
   // Cluster bottom sheet (shows list of pins in a cluster)
   const [clusterPins, setClusterPins] = useState<DiscoveredPin[]>([]);
   const [clusterVisible, setClusterVisible] = useState(false);
@@ -710,8 +719,27 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     (async () => {
       try {
         headingSub = await Location.watchHeadingAsync((h) => {
-          if (h.trueHeading >= 0) setHeading(h.trueHeading);
-          else if (h.magHeading >= 0) setHeading(h.magHeading);
+          const raw = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          if (raw < 0) return;
+
+          // First reading — initialise directly
+          if (smoothedHeadingRef.current === null) {
+            smoothedHeadingRef.current = raw;
+            setHeading(raw);
+            return;
+          }
+
+          // Circular EMA: shortest-arc interpolation
+          let diff = raw - smoothedHeadingRef.current;
+          if (diff > 180) diff -= 360;
+          if (diff < -180) diff += 360;
+
+          // Dead-zone: ignore jitter < 1.5° to reduce render pressure
+          if (Math.abs(diff) < 1.5) return;
+
+          smoothedHeadingRef.current =
+            ((smoothedHeadingRef.current + diff * HEADING_SMOOTHING) % 360 + 360) % 360;
+          setHeading(smoothedHeadingRef.current);
         });
       } catch (e) {
         console.warn('Heading unavailable', e);
@@ -742,7 +770,9 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     } catch { /* non-critical */ }
   };
 
-  /** Add a fog circle when user moves more than FOG_CIRCLE_STRIDE metres */
+  /** Add a fog circle when user moves more than FOG_CIRCLE_STRIDE metres.
+   *  IMPORTANT: this is ONLY called from the GPS watchPosition callback —
+   *  never from search/flyTo/camera-pan, so FoW clearing is strictly GPS-linked. */
   const maybeAddFogCircle = useCallback((coords: LocationCoords) => {
     const last = lastFogCircleRef.current;
     if (!last || haversineMeters(last.lat, last.lon, coords.latitude, coords.longitude) >= FOG_CIRCLE_STRIDE) {
@@ -1132,6 +1162,50 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     }
   }, [discoveredPins]);
 
+  // ── Camera-panned hex-cloud discovery ─────────────────────────────────────
+  // When the user pans the map far from their GPS position, fetch pins for the
+  // visible area so hex clouds render there (giving them a hint to explore).
+  const handleRegionChange = useCallback(async (center: { lat: number; lon: number }) => {
+    // Throttle: max one camera-discovery every 3 s
+    const now = Date.now();
+    if (now - lastCameraFetchRef.current < 3000) return;
+    lastCameraFetchRef.current = now;
+
+    // If camera is near the user, the GPS heartbeat already handles this area
+    if (location && haversineMeters(location.latitude, location.longitude, center.lat, center.lon) < 200) {
+      setCameraPins([]);
+      return;
+    }
+
+    try {
+      const response = await apiService.discoverPins(center.lat, center.lon, 500);
+      const cPins: MapPin[] = response.pins.map(p => ({
+        id: String(p.id),
+        latitude: p.latitude,
+        longitude: p.longitude,
+        type: 'text' as const,
+        content: p.content,
+        likes: p.likes,
+        dislikes: p.dislikes,
+        reports: p.reports,
+        is_suppressed: p.is_suppressed,
+        is_community: p.is_community,
+        distance: 9999,
+        isMuted: false,
+      }));
+      setCameraPins(cPins);
+    } catch (e) {
+      console.warn('Camera region discover failed:', e);
+    }
+  }, [location]);
+
+  // Merge GPS-discovered mapPins with camera-discovered cameraPins (dedup by id)
+  const allMapPins = useMemo(() => {
+    const gpsIds = new Set(mapPins.map(p => p.id));
+    const unique = cameraPins.filter(cp => !gpsIds.has(cp.id));
+    return [...mapPins, ...unique];
+  }, [mapPins, cameraPins]);
+
   // Handle cluster press — show list of pins in the cluster
   const handleClusterPress = useCallback((pinIds: string[]) => {
     const pins = discoveredPins.filter(p => pinIds.includes(String(p.id)));
@@ -1184,7 +1258,19 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           {refreshing ? (
             <ActivityIndicator size="small" color={MiyabiColors.bamboo} />
           ) : (
-            <Text style={styles.rescanButtonText}>◎</Text>
+            <Svg width={28} height={28} viewBox="0 0 28 28">
+              {/* outer ring */}
+              <Circle cx="14" cy="14" r="12" stroke={MiyabiColors.bamboo} strokeWidth="1.8" fill="none" />
+              {/* inner ring */}
+              <Circle cx="14" cy="14" r="6" stroke={MiyabiColors.bamboo} strokeWidth="1.4" fill="none" />
+              {/* centre dot */}
+              <Circle cx="14" cy="14" r="2" fill={MiyabiColors.bamboo} />
+              {/* crosshair lines */}
+              <Line x1="14" y1="0" x2="14" y2="5" stroke={MiyabiColors.bamboo} strokeWidth="1.5" strokeLinecap="round" />
+              <Line x1="14" y1="23" x2="14" y2="28" stroke={MiyabiColors.bamboo} strokeWidth="1.5" strokeLinecap="round" />
+              <Line x1="0" y1="14" x2="5" y2="14" stroke={MiyabiColors.bamboo} strokeWidth="1.5" strokeLinecap="round" />
+              <Line x1="23" y1="14" x2="28" y2="14" stroke={MiyabiColors.bamboo} strokeWidth="1.5" strokeLinecap="round" />
+            </Svg>
           )}
         </TouchableOpacity>
       </View>
@@ -1238,7 +1324,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         {location && (
           <BasicMap
             userLocation={location}
-            pins={mapPins}
+            pins={allMapPins}
             onPinPress={(pinId) => { handleMapPinSelect(pinId); }}
             onClusterPress={handleClusterPress}
             onMutedPinPress={handleUnmutePinPress}
@@ -1247,6 +1333,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             exploredCircles={exploredCircles}
             flyToLocation={flyToLocation}
             resetRotationToken={resetMapToken}
+            onRegionChange={handleRegionChange}
           />
         )}
 
@@ -1411,20 +1498,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Refresh Button — transparent glass
+  // Refresh Button — transparent, proper touch target
   rescanButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rescanButtonDisabled: {
     opacity: 0.5,
-  },
-  rescanButtonText: {
-    fontSize: 16,
-    color: MiyabiColors.bamboo,
   },
   
   // Map Container

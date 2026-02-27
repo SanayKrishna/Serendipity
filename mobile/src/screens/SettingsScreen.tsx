@@ -3,7 +3,7 @@
  * 
  * User preferences including animated language toggle (EN / JA)
  */
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useContext, useState } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,10 @@ import {
   TouchableOpacity,
   ScrollView,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { AuthContext } from '../navigation/AppNavigator';
 import {
   MiyabiColors,
   MiyabiSpacing,
@@ -27,6 +29,9 @@ const KNOB_WIDTH = (TOGGLE_WIDTH - TOGGLE_PADDING * 2) / 2;
 
 const SettingsScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { t, i18n } = useTranslation();
+  const { logout } = useContext(AuthContext);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const currentLanguage = i18n.language;
   
   // Animated value for toggle slider (0 = EN, 1 = JA)
@@ -54,6 +59,14 @@ const SettingsScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     inputRange: [0, 1],
     outputRange: [0, KNOB_WIDTH],
   });
+
+  const handleLogout = async () => {
+    setShowLogoutConfirm(false);
+    setLoggingOut(true);
+    // Auth context handles clearing session + resetting navigation state
+    await logout();
+    setLoggingOut(false);
+  };
 
   return (
     <View style={styles.container}>
@@ -137,6 +150,44 @@ const SettingsScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           <Text style={styles.infoText}>Serendipity SNS</Text>
           <Text style={styles.infoSubText}>Version 1.0.0</Text>
           <Text style={styles.infoSubText}>{t('settings.appDescription')}</Text>
+        </View>
+
+        {/* Log Out */}
+        <View style={styles.logoutSection}>
+          {!showLogoutConfirm ? (
+            <TouchableOpacity
+              style={styles.logoutButton}
+              onPress={() => setShowLogoutConfirm(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.logoutButtonText}>{t('settings.logout') || 'Log Out'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.logoutConfirmBox}>
+              <Text style={styles.logoutConfirmText}>{t('settings.logoutConfirm') || 'Are you sure you want to log out?'}</Text>
+              <View style={styles.logoutConfirmRow}>
+                <TouchableOpacity
+                  style={styles.logoutCancelBtn}
+                  onPress={() => setShowLogoutConfirm(false)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.logoutCancelText}>{t('settings.cancel') || 'Cancel'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.logoutConfirmBtn}
+                  onPress={handleLogout}
+                  disabled={loggingOut}
+                  activeOpacity={0.7}
+                >
+                  {loggingOut ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={styles.logoutConfirmBtnText}>{t('settings.logoutConfirmBtn') || 'Log Out'}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -255,6 +306,67 @@ const styles = StyleSheet.create({
     ...MiyabiStyles.caption,
     color: MiyabiColors.sumiLight,
     marginBottom: 2,
+  },
+  
+  // Logout
+  logoutSection: {
+    marginTop: MiyabiSpacing.lg,
+    paddingBottom: MiyabiSpacing.xxl,
+  },
+  logoutButton: {
+    borderWidth: 1.5,
+    borderColor: MiyabiColors.error,
+    borderRadius: MiyabiBorderRadius.md,
+    paddingVertical: MiyabiSpacing.md,
+    alignItems: 'center',
+  },
+  logoutButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: MiyabiColors.error,
+    letterSpacing: 0.3,
+  },
+  logoutConfirmBox: {
+    backgroundColor: MiyabiColors.cardBackground,
+    borderRadius: MiyabiBorderRadius.md,
+    padding: MiyabiSpacing.md,
+    ...MiyabiShadows.sm,
+  },
+  logoutConfirmText: {
+    fontSize: 14,
+    color: MiyabiColors.sumi,
+    textAlign: 'center',
+    marginBottom: MiyabiSpacing.md,
+  },
+  logoutConfirmRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: MiyabiSpacing.sm,
+  },
+  logoutCancelBtn: {
+    flex: 1,
+    paddingVertical: MiyabiSpacing.sm + 2,
+    borderRadius: MiyabiBorderRadius.sm,
+    borderWidth: 1,
+    borderColor: MiyabiColors.divider,
+    alignItems: 'center',
+  },
+  logoutCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: MiyabiColors.sumiLight,
+  },
+  logoutConfirmBtn: {
+    flex: 1,
+    paddingVertical: MiyabiSpacing.sm + 2,
+    borderRadius: MiyabiBorderRadius.sm,
+    backgroundColor: MiyabiColors.error,
+    alignItems: 'center',
+  },
+  logoutConfirmBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   
   // Hamburger Menu (integrated in header)

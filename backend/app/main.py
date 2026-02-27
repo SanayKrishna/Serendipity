@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request, Header
+from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
@@ -23,11 +23,14 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 import os
+import hashlib
+import unicodedata
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from app.database import get_db
+from app.utils.email import send_welcome_email
 from app.models import Pin, Device, PinInteraction, User
 from app.schemas import (
     PinCreate, 
@@ -277,14 +280,37 @@ def generate_token() -> str:
     return secrets.token_hex(32)
 
 
+def _pre_hash(password: str) -> str:
+    """SHA-256 pre-hash so bcrypt never sees more than 64 bytes regardless of
+    how long the original password is.  SHA-256 always produces a 32-byte
+    digest; we encode it as a 64-char hex string (64 bytes UTF-8) which is
+    well under bcrypt's hard 72-byte limit."""
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its bcrypt hash.
+    Tries the current scheme (SHA-256 pre-hash → bcrypt) first, then falls
+    back to the legacy scheme (raw password → bcrypt) so accounts created
+    before this change continue to work."""
+    # Current scheme
+    try:
+        if pwd_context.verify(_pre_hash(plain_password), hashed_password):
+            return True
+    except Exception:
+        pass
+    # Legacy scheme (backwards compatibility)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        return False
 
 
 def get_password_hash(password: str) -> str:
-    """Hash a password for storage"""
-    return pwd_context.hash(password)
+    """Hash a password for storage using SHA-256 + bcrypt.
+    SHA-256 pre-hashing removes bcrypt's 72-byte limit so passwords of any
+    length are accepted."""
+    return pwd_context.hash(_pre_hash(password))
 
 
 @app.post("/auth/check-username", response_model=UsernameCheckResponse, tags=["Authentication"])
@@ -312,16 +338,33 @@ async def check_username(request: UsernameCheckRequest, db: Session = Depends(ge
 
 
 @app.post("/auth/signup", response_model=AuthResponse, tags=["Authentication"])
-async def signup(request: SignUpRequest, db: Session = Depends(get_db)):
+async def signup(
+    request: SignUpRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """
     📝 Create a new user account.
     
     - **email**: Valid email address
     - **username**: Unique username (3-15 chars, lowercase alphanumeric)
-    - **password**: Secure password (min 8 characters)
-    - **profile_icon**: Selected profile icon ID (default: explorer_01)
+    - **password**: Secure password (min 8 characters, max 64)
+    - **profile_icon**: Selected profile icon ID (default: shippo)
     """
     try:
+        # Strip ALL invisible Unicode format/control characters that mobile keyboards
+        # inject (zero-width spaces, word joiners, soft hyphens, etc.) PLUS edge whitespace.
+        # unicodedata categories: Cf = format chars, Cc = control chars — all invisible.
+        # Strip ALL invisible Unicode format/control characters that mobile
+        # keyboards inject (zero-width spaces, word joiners, soft hyphens, etc.)
+        password_clean = ''.join(
+            ch for ch in request.password
+            if unicodedata.category(ch) not in ('Cf', 'Cc')
+        ).strip()
+
+        # No length limit — SHA-256 pre-hashing inside get_password_hash()
+        # means bcrypt never sees more than 64 bytes regardless of password length.
+
         # Check if username already exists
         existing_user = db.query(User).filter(User.username == request.username.lower()).first()
         if existing_user:
@@ -333,7 +376,7 @@ async def signup(request: SignUpRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="Email already registered")
         
         # Create new user
-        password_hash = get_password_hash(request.password)
+        password_hash = get_password_hash(password_clean)
         new_user = User(
             username=request.username.lower(),
             email=request.email.lower(),
@@ -352,6 +395,13 @@ async def signup(request: SignUpRequest, db: Session = Depends(get_db)):
         token = generate_token()
         
         log_event("SIGNUP", f"New user created: {new_user.username}", user_id=new_user.id)
+
+        # Fire welcome email in the background (non-blocking; safe no-op if SMTP unconfigured)
+        background_tasks.add_task(
+            send_welcome_email,
+            to_email=new_user.email,
+            username=new_user.username,
+        )
         
         return AuthResponse(
             user_id=new_user.id,
@@ -390,8 +440,13 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         if not user:
             raise HTTPException(status_code=401, detail="Invalid username/email or password")
         
-        # Verify password
-        if not verify_password(request.password, user.password_hash):
+        # Clean password the same way it was cleaned at signup
+        login_password = ''.join(
+            ch for ch in request.password
+            if unicodedata.category(ch) not in ('Cf', 'Cc')
+        ).strip()
+
+        if not verify_password(login_password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid username/email or password")
         
         # Update last login
@@ -428,6 +483,7 @@ async def discover_pins(
     request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Your latitude"),
     lon: float = Query(..., ge=-180, le=180, description="Your longitude"),
+    radius: Optional[int] = Query(None, ge=10, le=2000, description="Search radius in meters (default: from config)"),
     db: Session = Depends(get_db),
     x_device_id: Optional[str] = Header(None, alias="X-Device-ID"),
     x_auth_type: Optional[str] = Header('device', alias="X-Auth-Type")
@@ -487,7 +543,7 @@ async def discover_pins(
         
         result = db.execute(
             query, 
-            {"lat": lat, "lon": lon, "radius": settings.DISCOVERY_RADIUS_METERS}
+            {"lat": lat, "lon": lon, "radius": radius if radius is not None else settings.DISCOVERY_RADIUS_METERS}
         )
         # Note: passes_by column may not exist yet until migration runs – handled with getattr
         

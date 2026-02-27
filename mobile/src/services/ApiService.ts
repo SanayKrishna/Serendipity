@@ -380,14 +380,17 @@ class ApiService {
   }
 
   /**
-   * Discover pins within 50 meters of current location
+   * Discover pins within range of a location.
+   * @param radius Optional search radius in meters (default: backend config, typically 50m)
    */
-  async discoverPins(lat: number, lon: number): Promise<DiscoverResponse> {
+  async discoverPins(lat: number, lon: number, radius?: number): Promise<DiscoverResponse> {
     return this.executeWithRetry(async () => {
+      const params: Record<string, number> = { lat, lon };
+      if (radius !== undefined) params.radius = radius;
       const response = await this.client.get<DiscoverResponse>(
         API_CONFIG.ENDPOINTS.DISCOVER,
         {
-          params: { lat, lon },
+          params,
         }
       );
       return response.data;

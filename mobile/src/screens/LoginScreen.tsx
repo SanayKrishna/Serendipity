@@ -22,14 +22,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiTypography, MiyabiShadows } from '../styles/miyabi';
 import { AppLogo } from '../components/AppLogo';
-import { getAuthApiUrl } from '../config/api';
+import { authService } from '../services/AuthService';
+import { useTranslation } from 'react-i18next';
 
 interface LoginScreenProps {
   navigation: any;
   onLoginSuccess: (user: any) => void;
+  onGuestContinue?: () => void;
 }
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, onGuestContinue }) => {
+  const { t, i18n } = useTranslation();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -40,31 +43,22 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess })
     
     // Validation
     if (!identifier || !password) {
-      setError('Please enter your credentials');
+      setError(t('auth.enterCredentials'));
       return;
     }
     
     setIsLoading(true);
     
     try {
-      const response = await fetch(`${getAuthApiUrl()}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          identifier: identifier.toLowerCase(),
-          password,
-        }),
-      });
+      const result = await authService.login(identifier, password);
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Login failed');
+      if (!result.success) {
+        throw new Error(result.error || 'Login failed');
       }
       
-      const data = await response.json();
-      
-      // Call success callback with user data
-      onLoginSuccess(data);
+      // Call success callback — session is already persisted in AsyncStorage
+      // by authService.login(), so "Remember Me" works automatically
+      onLoginSuccess(authService.getUser());
       
     } catch (err: any) {
       setError(err.message || 'Invalid credentials');
@@ -87,15 +81,15 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess })
           {/* Logo */}
           <View style={styles.logoContainer}>
             <AppLogo size="large" />
-            <Text style={styles.title}>Welcome Back</Text>
-            <Text style={styles.subtitle}>Continue your exploration</Text>
+            <Text style={styles.title}>{t('auth.welcomeBack')}</Text>
+            <Text style={styles.subtitle}>{t('auth.continueExploration')}</Text>
           </View>
           
           {/* Form */}
           <View style={styles.form}>
             {/* Identifier (username or email) */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Username or Email</Text>
+              <Text style={styles.label}>{t('auth.usernameOrEmail')}</Text>
               <TextInput
                 style={styles.input}
                 value={identifier}
@@ -111,7 +105,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess })
             
             {/* Password */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Password</Text>
+              <Text style={styles.label}>{t('auth.password')}</Text>
               <TextInput
                 style={styles.input}
                 value={password}
@@ -121,6 +115,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess })
                 secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
+                maxLength={64}
                 textContentType="password"
               />
             </View>
@@ -137,17 +132,37 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess })
               {isLoading ? (
                 <ActivityIndicator color={MiyabiColors.washi} />
               ) : (
-                <Text style={styles.submitButtonText}>Sign In</Text>
+                <Text style={styles.submitButtonText}>{t('auth.signIn')}</Text>
               )}
             </TouchableOpacity>
             
             {/* Switch to sign up */}
             <View style={styles.switchContainer}>
-              <Text style={styles.switchText}>New explorer? </Text>
+              <Text style={styles.switchText}>{t('auth.newExplorer')}</Text>
               <TouchableOpacity onPress={() => navigation.navigate('SignUp')}>
-                <Text style={styles.switchLink}>Create Account</Text>
+                <Text style={styles.switchLink}>{t('auth.createAccount')}</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Continue as Guest */}
+            {onGuestContinue && (
+              <TouchableOpacity
+                style={styles.guestButton}
+                onPress={onGuestContinue}
+              >
+                <Text style={styles.guestButtonText}>{t('auth.continueAsGuest')}</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Language Toggle — footer */}
+            <TouchableOpacity
+              style={styles.langToggle}
+              onPress={() => i18n.changeLanguage(i18n.language === 'en' ? 'ja' : 'en')}
+            >
+              <Text style={[styles.langCode, i18n.language === 'en' && styles.langActive]}>EN</Text>
+              <Text style={styles.langSep}> | </Text>
+              <Text style={[styles.langCode, i18n.language === 'ja' && styles.langActive]}>JP</Text>
+            </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -245,6 +260,40 @@ const styles = StyleSheet.create({
     fontSize: MiyabiTypography.fontSize.sm,
     fontWeight: MiyabiTypography.fontWeight.semibold,
     color: MiyabiColors.bamboo,
+  },
+  guestButton: {
+    marginTop: MiyabiSpacing.xl,
+    paddingVertical: MiyabiSpacing.md,
+    alignItems: 'center',
+    borderRadius: MiyabiBorderRadius.md,
+    borderWidth: 1,
+    borderColor: MiyabiColors.divider,
+  },
+  guestButtonText: {
+    fontSize: MiyabiTypography.fontSize.sm,
+    fontWeight: MiyabiTypography.fontWeight.medium,
+    color: MiyabiColors.sumiLight,
+    letterSpacing: 0.3,
+  },
+  langToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: MiyabiSpacing.xl,
+    paddingBottom: MiyabiSpacing.md,
+  },
+  langCode: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: MiyabiColors.sumiLight,
+    letterSpacing: 0.5,
+  },
+  langActive: {
+    color: MiyabiColors.bamboo,
+  },
+  langSep: {
+    fontSize: 12,
+    color: MiyabiColors.divider,
   },
 });
 

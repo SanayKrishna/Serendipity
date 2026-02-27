@@ -34,6 +34,8 @@ interface BasicMapProps {
   flyToLocation?: { lat: number; lon: number; label?: string } | null;
   /** Increment this token to smoothly animate map rotation back to 0° */
   resetRotationToken?: number;
+  /** Called when the user pans the camera — provides new center lat/lon */
+  onRegionChange?: (center: { lat: number; lon: number }) => void;
 }
 
 const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
@@ -44,7 +46,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    * { box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    * { box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
     /* html/body/outer-container all share the OSM land-tile colour.
        If any pixel is ever exposed during rotation it looks like a map tile, never black. */
     html, body { margin:0; padding:0; overflow:hidden; width:100%; height:100%; background:#e8e0d4; }
@@ -56,15 +58,19 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
        1.3×187.5 = 487.5 > 447 → every viewport corner is always covered at ANY rotation angle.
        transform-origin:50% 50% pivots the rotation around the visual screen centre. */
     #map-wrapper { position:absolute; top:-80%; left:-80%; width:260%; height:260%; transform-origin:50% 50%; background:#e8e0d4; }
-    #map { position:absolute; top:0; bottom:0; width:100%; height:100%; z-index:452; }
-    #fog-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:450; width:100%; height:100%; }
-    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:451; width:100%; height:100%; filter:blur(10px); }
+    #map { position:absolute; top:0; bottom:0; width:100%; height:100%; z-index:1; }
+    #fog-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:3; width:100%; height:100%; opacity:0; transition:opacity 0.8s ease; }
+    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:4; width:100%; height:100%; filter:blur(10px); }
 
     .user-avatar-wrapper { width:60px; height:60px; transition:transform 0.15s ease-out; }
     .user-avatar-wrapper svg { width:60px; height:60px; display:block; }
     .pin-cluster { background:#1a1a2e; color:#fff; border:3px solid rgba(255,255,255,0.9); border-radius:6px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; transform:rotate(45deg); width:32px; height:32px; }
     .pin-cluster-inner { transform:rotate(-45deg); pointer-events:none; }
-    .place-label { color:rgba(255,255,255,0.85); font-size:10px; font-weight:600; white-space:nowrap; text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 8px rgba(0,0,0,0.7); pointer-events:none; background:rgba(0,0,10,0.45); padding:1px 4px; border-radius:3px; max-width:90px; overflow:hidden; text-overflow:ellipsis; }
+    .place-label { color:rgba(255,255,255,0.85); font-size:10px; font-weight:600; white-space:nowrap; text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 8px rgba(0,0,0,0.7); pointer-events:none; background:transparent; padding:1px 4px; border-radius:3px; max-width:90px; overflow:hidden; text-overflow:ellipsis; }
+    /* Suppress Leaflet default tooltip/popup chrome */
+    .leaflet-tooltip, .leaflet-popup, .leaflet-popup-content-wrapper, .leaflet-popup-tip { display:none !important; }
+    /* Kill Leaflet default marker background/border (prevents dark-box callout) */
+    .leaflet-marker-icon, .leaflet-div-icon { background:none !important; border:none !important; box-shadow:none !important; }
   </style>
 </head>
 <body>
@@ -151,14 +157,55 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   }
 
   function drawFog(){
-    // No global overlay — base map (streets, buildings, water) stays fully visible
-    var w = mapWrapper.offsetWidth, h = mapWrapper.offsetHeight;
-    fogCanvas.width = w; fogCanvas.height = h;
+    var w=mapWrapper.offsetWidth, h=mapWrapper.offsetHeight;
+    fogCanvas.width=w; fogCanvas.height=h;
     fogCtx.clearRect(0,0,w,h);
+    if(!map) return;
+    // Proximity fog: only active when user is within 50m of any pin
+    var nearDist=9999;
+    if(currentPins&&currentPins.length>0){
+      for(var i=0;i<currentPins.length;i++){
+        var d=haversine(userLat,userLon,currentPins[i].latitude,currentPins[i].longitude);
+        if(d<nearDist) nearDist=d;
+      }
+    }
+    if(nearDist>50){ fogCanvas.style.opacity='0'; return; }
+    // Fog active — dark overlay
+    fogCanvas.style.opacity='1';
+    fogCtx.fillStyle='rgba(15,20,35,0.72)';
+    fogCtx.fillRect(0,0,w,h);
+    // Flashlight: 3-ring radial clearance at user GPS position
+    var pt=map.latLngToContainerPoint([userLat,userLon]);
+    var r=metersToPixels(50,userLat);
+    fogCtx.globalCompositeOperation='destination-out';
+    var g=fogCtx.createRadialGradient(pt.x,pt.y,0,pt.x,pt.y,r*1.15);
+    g.addColorStop(0,'rgba(0,0,0,1)');
+    g.addColorStop(0.22,'rgba(0,0,0,0.92)');
+    g.addColorStop(0.28,'rgba(0,0,0,0.55)');
+    g.addColorStop(0.45,'rgba(0,0,0,0.50)');
+    g.addColorStop(0.55,'rgba(0,0,0,0.30)');
+    g.addColorStop(0.70,'rgba(0,0,0,0.25)');
+    g.addColorStop(0.85,'rgba(0,0,0,0.08)');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    fogCtx.beginPath(); fogCtx.arc(pt.x,pt.y,r*1.15,0,Math.PI*2); fogCtx.fillStyle=g; fogCtx.fill();
+    fogCtx.globalCompositeOperation='source-over';
   }
 
   var userLat=0, userLon=0;
-  function applyHeading(h){ var el=document.getElementById('user-avatar'); if(el) el.style.transform='rotate('+h+'deg)'; }
+  // ── Smooth heading interpolation (low-pass lerp like Google Maps) ─────────
+  var _headingCur=0, _headingTarget=0, _headingInited=false, _headingRAF=null;
+  function _shortAngleDist(from,to){ var d=(to-from)%360; if(d>180) d-=360; if(d<-180) d+=360; return d; }
+  function _lerpHeading(){
+    var diff=_shortAngleDist(_headingCur,_headingTarget);
+    if(Math.abs(diff)<0.5){ _headingCur=_headingTarget; _headingRAF=null; }
+    else { _headingCur=(_headingCur+diff*0.06)%360; if(_headingCur<0) _headingCur+=360; _headingRAF=requestAnimationFrame(_lerpHeading); }
+    var el=document.getElementById('user-avatar'); if(el) el.style.transform='rotate('+_headingCur+'deg)';
+  }
+  function applyHeading(h){
+    _headingTarget=h;
+    if(!_headingInited){ _headingCur=h; _headingInited=true; var el=document.getElementById('user-avatar'); if(el) el.style.transform='rotate('+h+'deg)'; return; }
+    if(!_headingRAF) _headingRAF=requestAnimationFrame(_lerpHeading);
+  }
 
   // ── Smooth avatar position lerp (like Google Maps) ─────────────────────────
   var _targetLat=0, _targetLon=0, _curLat=0, _curLon=0, _avatarRAF=null, _avatarInited=false;
@@ -231,7 +278,12 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     }
   }
 
-  function renderPins(pins){ pinMarkers.forEach(function(m){ map.removeLayer(m); }); pinMarkers = []; var clusters = clusterPins(pins);
+  function renderPins(pins){ pinMarkers.forEach(function(m){ map.removeLayer(m); }); pinMarkers = [];
+    // Proximity fog: hide pin markers beyond 20m when fog is active
+    var fogOn=false;
+    for(var fi=0;fi<pins.length;fi++){ if(haversine(userLat,userLon,pins[fi].latitude,pins[fi].longitude)<=50){fogOn=true;break;} }
+    var showPins=fogOn?pins.filter(function(p){return haversine(userLat,userLon,p.latitude,p.longitude)<=20;}):pins;
+    var clusters = clusterPins(showPins);
     clusters.forEach(function(group){
       if (group.length===1){ var pin=group[0]; var icon=makePinIcon(pin); var marker=L.marker([pin.latitude,pin.longitude],{icon:icon}).addTo(map); marker.on('click',function(e){ L.DomEvent.stopPropagation(e); var type=pin.isMuted?'mutedPinPress':pin.is_suppressed?'suppressedPinPress':'pinPress'; pinTap(pin.id,type); }); pinMarkers.push(marker);
       } else { var lat = group.reduce(function(s,p){return s+p.latitude;},0)/group.length; var lon = group.reduce(function(s,p){return s+p.longitude;},0)/group.length; var ids = group.map(function(p){return p.id}); var count = group.length; var idsStr=ids.join(','); var clusterIcon = L.divIcon({ className:'leaflet-interactive', html:'<div data-cids="'+idsStr+'" onclick="clusterTap(this.dataset.cids)" class="pin-cluster"><span class="pin-cluster-inner">'+count+'</span></div>', iconSize:[40,40], iconAnchor:[20,20] }); var cm = L.marker([lat,lon],{icon:clusterIcon}).addTo(map); cm.on('click',function(e){ L.DomEvent.stopPropagation(e); clusterTap(idsStr); }); pinMarkers.push(cm); }
@@ -243,7 +295,17 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
     var avatarHtml = '<div id="user-avatar" class="user-avatar-wrapper"><svg viewBox="0 0 60 60"><defs><filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M30 4 L40 22 L30 18 L20 22 Z" fill="rgba(74,144,226,0.35)" stroke="rgba(74,144,226,0.55)" stroke-width="0.8"/><circle cx="30" cy="30" r="8" fill="#4A90E2" stroke="white" stroke-width="3" filter="url(#glow)"/></svg></div>';
     var userIcon = L.divIcon({ className:'', html:avatarHtml, iconSize:[60,60], iconAnchor:[30,30] }); userMarker = L.marker([initLat,initLon],{icon:userIcon,zIndexOffset:1000}).addTo(map);
-    map.on('moveend zoomend viewreset resize', scheduleFogRedraw); scheduleFogRedraw(); if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
+    map.on('moveend zoomend viewreset resize', scheduleFogRedraw);
+    // Debounced region-change message — lets React side fetch pins for the visible area
+    var _regionDebounce = null;
+    map.on('moveend', function() {
+      if (_regionDebounce) clearTimeout(_regionDebounce);
+      _regionDebounce = setTimeout(function() {
+        var c = map.getCenter();
+        if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ type:'regionChange', lat:c.lat, lon:c.lng }));
+      }, 600);
+    });
+    scheduleFogRedraw(); if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
   }
 
   function renderPlaceNames(circles){
@@ -374,7 +436,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
 </body>
 </html>`;
 
-export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPress, onClusterPress, onMutedPinPress, discoveryRadius = 50, compassHeading = 0, exploredCircles = [], flyToLocation, resetRotationToken }) => {
+export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPress, onClusterPress, onMutedPinPress, discoveryRadius = 50, compassHeading = 0, exploredCircles = [], flyToLocation, resetRotationToken, onRegionChange }) => {
   const webViewRef = useRef<WebView>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
@@ -412,6 +474,7 @@ export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPre
       else if (data.type === 'clusterPress' && onClusterPress) onClusterPress(data.pinIds);
       else if (data.type === 'mutedPinPress' && onMutedPinPress) onMutedPinPress(data.pinId);
       else if (data.type === 'mapReady') setMapLoaded(true);
+      else if (data.type === 'regionChange' && onRegionChange) onRegionChange({ lat: data.lat, lon: data.lon });
     } catch (e) { console.error('BasicMap message error:', e); }
   };
 
