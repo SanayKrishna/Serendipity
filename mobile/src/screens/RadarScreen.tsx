@@ -255,7 +255,7 @@ const BottomSheet: React.FC<{
         {/* Actions row 1: Like + Dislike */}
         <View style={styles.actionsRow}>
           <TouchableOpacity
-            style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#B71C1C' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+            style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#1B5E20' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
             onPress={() => onLike(pin.id)}
             activeOpacity={0.8}
             disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
@@ -463,7 +463,7 @@ const CommunityHubSheet: React.FC<{
             {/* Actions */}
             <View style={styles.actionsRow}>
               <TouchableOpacity
-                style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#B71C1C' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+                style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#1B5E20' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
                 onPress={() => onLike(pin.id)}
                 activeOpacity={0.8}
                 disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
@@ -910,8 +910,12 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     // Interaction lock: check if user already rated this pin
     const current = pinInteractions[pinId];
     if (current === 'liked') {
-      // Toggle off (undo like)
+      // Toggle off (undo like) — decrement counter optimistically
       saveInteraction(pinId, null);
+      setDiscoveredPins(prev => prev.map(p => p.id === pinId ? { ...p, likes: Math.max(0, p.likes - 1) } : p));
+      if (selectedPin?.id === pinId) {
+        setSelectedPin(prev => prev ? { ...prev, likes: Math.max(0, prev.likes - 1) } : prev);
+      }
       return;
     }
     if (current === 'disliked' || current === 'reported') {
@@ -999,7 +1003,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     }
   };
 
-  const handleReport = async (pinId: number) => {
+  const handleReport = (pinId: number) => {
     // Interaction lock
     const current = pinInteractions[pinId];
     if (current === 'reported') { saveInteraction(pinId, null); return; }
@@ -1007,61 +1011,68 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       showInfo(t('radar.alreadyInteracted'), t('radar.alreadyInteractedMsg'));
       return;
     }
-    saveInteraction(pinId, 'reported');
-    locationService.markPinInteracted(pinId);
-    // Optimistic update - increment reports and check suppression immediately
-    const optimisticUpdate = (pins: DiscoveredPin[]) =>
-      pins.map((p) => {
-        if (p.id === pinId) {
-          const newReports = p.reports + 1;
-          const newSuppressed = newReports > p.likes * 2;
-          return { ...p, reports: newReports, is_suppressed: newSuppressed };
+    // Show confirmation dialog immediately — no async blocking before the modal
+    showConfirm(
+      t('radar.reportBtn') || 'Report this pin',
+      'Report this pin as inappropriate or harmful?',
+      async () => {
+        saveInteraction(pinId, 'reported');
+        locationService.markPinInteracted(pinId);
+        // Optimistic update - increment reports and check suppression immediately
+        const optimisticUpdate = (pins: DiscoveredPin[]) =>
+          pins.map((p) => {
+            if (p.id === pinId) {
+              const newReports = p.reports + 1;
+              const newSuppressed = newReports > p.likes * 2;
+              return { ...p, reports: newReports, is_suppressed: newSuppressed };
+            }
+            return p;
+          });
+        
+        setDiscoveredPins(optimisticUpdate);
+        if (selectedPin?.id === pinId) {
+          const newReports = selectedPin.reports + 1;
+          const newSuppressed = newReports > selectedPin.likes * 2;
+          setSelectedPin({ ...selectedPin, reports: newReports, is_suppressed: newSuppressed });
         }
-        return p;
-      });
-    
-    setDiscoveredPins(optimisticUpdate);
-    if (selectedPin?.id === pinId) {
-      const newReports = selectedPin.reports + 1;
-      const newSuppressed = newReports > selectedPin.likes * 2;
-      setSelectedPin({ ...selectedPin, reports: newReports, is_suppressed: newSuppressed });
-    }
-    
-    try {
-      const response = await apiService.reportPin(pinId);
-      // Confirm with server data
-      setDiscoveredPins((prev) =>
-        prev.map((p) =>
-          p.id === pinId 
-            ? { ...p, reports: response.reports, is_suppressed: response.is_suppressed } 
-            : p
-        )
-      );
-      // Update map pins to reflect suppression
-      if (location) {
-        const updated = await convertToMapPins(
-          discoveredPins.map(p => p.id === pinId ? { ...p, reports: response.reports, is_suppressed: response.is_suppressed } : p),
-          location.latitude,
-          location.longitude
-        );
-        setMapPins(updated);
+        
+        try {
+          const response = await apiService.reportPin(pinId);
+          // Confirm with server data
+          setDiscoveredPins((prev) =>
+            prev.map((p) =>
+              p.id === pinId 
+                ? { ...p, reports: response.reports, is_suppressed: response.is_suppressed } 
+                : p
+            )
+          );
+          // Update map pins to reflect suppression
+          if (location) {
+            const updated = await convertToMapPins(
+              discoveredPins.map(p => p.id === pinId ? { ...p, reports: response.reports, is_suppressed: response.is_suppressed } : p),
+              location.latitude,
+              location.longitude
+            );
+            setMapPins(updated);
+          }
+          if (selectedPin?.id === pinId) {
+            setSelectedPin({ ...selectedPin, reports: response.reports, is_suppressed: response.is_suppressed });
+          }
+          // Show feedback
+          showInfo(
+            t('radar.reported'),
+            response.is_suppressed 
+              ? t('radar.pinReportedSuppressed')
+              : t('radar.pinReportedCount', { count: response.reports })
+          );
+        } catch (e: any) {
+          console.error('Report failed:', e);
+          if (apiService.isRateLimitError(e)) {
+            setError(t('radar.tooManyReports'));
+          }
+        }
       }
-      if (selectedPin?.id === pinId) {
-        setSelectedPin({ ...selectedPin, reports: response.reports, is_suppressed: response.is_suppressed });
-      }
-      // Show feedback
-      showInfo(
-        t('radar.reported'),
-        response.is_suppressed 
-          ? t('radar.pinReportedSuppressed')
-          : t('radar.pinReportedCount', { count: response.reports })
-      );
-    } catch (e: any) {
-      console.error('Report failed:', e);
-      if (apiService.isRateLimitError(e)) {
-        setError(t('radar.tooManyReports'));
-      }
-    }
+    );
   };
 
   const handleDelete = (pinId: number) => {
@@ -1173,7 +1184,7 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
           {refreshing ? (
             <ActivityIndicator size="small" color={MiyabiColors.bamboo} />
           ) : (
-            <Text style={styles.rescanButtonText}>🔄</Text>
+            <Text style={styles.rescanButtonText}>◎</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -1400,15 +1411,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Refresh Button — matches hamburger style
+  // Refresh Button — transparent glass
   rescanButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: MiyabiColors.washi + 'F0',
     alignItems: 'center',
     justifyContent: 'center',
-    ...MiyabiShadows.md,
   },
   rescanButtonDisabled: {
     opacity: 0.5,
@@ -1723,28 +1732,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // Drop Pin FAB
+  // Drop Pin FAB — transparent, compact
   dropFab: {
     position: 'absolute',
     bottom: 32,
     alignSelf: 'center',
     left: '50%',
-    marginLeft: -28,
-    width: 56,
-    height: 56,
-    backgroundColor: MiyabiColors.mikan,
-    borderRadius: 28,
+    marginLeft: -22,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: MiyabiColors.mikanDark,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 8,
     zIndex: 12,
   },
   dropFabIcon: {
-    fontSize: 26,
+    fontSize: 20,
   },
   dropFabLabel: {
     display: 'none',
@@ -1800,10 +1803,8 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: MiyabiColors.washi + 'F0',
     alignItems: 'center',
     justifyContent: 'center',
-    ...MiyabiShadows.md,
   },
   searchButtonText: {
     fontSize: 16,

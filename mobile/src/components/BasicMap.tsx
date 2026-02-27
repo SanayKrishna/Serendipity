@@ -44,7 +44,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     /* html/body/outer-container all share the OSM land-tile colour.
        If any pixel is ever exposed during rotation it looks like a map tile, never black. */
     html, body { margin:0; padding:0; overflow:hidden; width:100%; height:100%; background:#e8e0d4; }
@@ -68,7 +68,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   </style>
 </head>
 <body>
-<div id="outer-container">
+<div id="outer-container" oncontextmenu="return false;">
 <div id="map-wrapper">
   <div id="map"></div>
   <canvas id="fog-canvas"></canvas>
