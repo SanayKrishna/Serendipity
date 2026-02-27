@@ -231,6 +231,7 @@ async def root():
     )
 
 
+@app.head("/health", tags=["Health"])
 @app.get("/health", response_model=MessageResponse, tags=["Health"])
 async def health_check(db: Session = Depends(get_db)):
     """Health check with database connectivity test — used by monitoring tools."""
@@ -245,6 +246,7 @@ async def health_check(db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
 
 
+@app.head("/health/fast", tags=["Health"])
 @app.get("/health/fast", response_model=MessageResponse, tags=["Health"])
 async def health_check_fast():
     """
