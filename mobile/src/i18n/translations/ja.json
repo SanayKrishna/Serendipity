@@ -121,6 +121,7 @@
     "deleteError": "削除に失敗しました",
     "liked": "いいね",
     "disliked": "よくない",
+    "hidden": "非表示",
     "created": "作成",
     "loadingDiary": "日記を読み込み中...",
     "expired": "期限切れ",

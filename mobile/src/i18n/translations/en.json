@@ -123,6 +123,7 @@
     "deleteError": "Failed to delete",
     "liked": "Liked",
     "disliked": "Disliked",
+    "hidden": "Hidden",
     "created": "Created",
     "loadingDiary": "Loading your diary...",
     "expired": "Expired",
