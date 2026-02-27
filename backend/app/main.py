@@ -53,11 +53,9 @@ from app.utils.content_filter import validate_content
 from app.utils.rate_limiter import limiter, RATE_LIMITS
 from app.utils.logging_middleware import RequestLoggingMiddleware, log_event, log_error
 
-# Password hashing
-from passlib.context import CryptContext
+# Password hashing — use bcrypt directly (passlib 1.7.4 is broken with bcrypt 4.x)
+import bcrypt as _bcrypt
 import secrets
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ============================================
 # SENTRY ERROR MONITORING (no-op if DSN not set)
@@ -280,37 +278,39 @@ def generate_token() -> str:
     return secrets.token_hex(32)
 
 
-def _pre_hash(password: str) -> str:
+def _pre_hash(password: str) -> bytes:
     """SHA-256 pre-hash so bcrypt never sees more than 64 bytes regardless of
     how long the original password is.  SHA-256 always produces a 32-byte
-    digest; we encode it as a 64-char hex string (64 bytes UTF-8) which is
+    digest; we encode it as a 64-char hex string (64 ASCII bytes) which is
     well under bcrypt's hard 72-byte limit."""
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    return hashlib.sha256(password.encode('utf-8')).hexdigest().encode('ascii')
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its bcrypt hash.
-    Tries the current scheme (SHA-256 pre-hash → bcrypt) first, then falls
-    back to the legacy scheme (raw password → bcrypt) so accounts created
+    """Verify a password against a bcrypt hash.
+    Tries the current scheme (SHA-256 -> bcrypt) first, then falls back to the
+    legacy scheme (raw password -> bcrypt via passlib) so accounts created
     before this change continue to work."""
-    # Current scheme
+    hashed_bytes = hashed_password.encode('utf-8') if isinstance(hashed_password, str) else hashed_password
+    # Current scheme: SHA-256 pre-hash
     try:
-        if pwd_context.verify(_pre_hash(plain_password), hashed_password):
+        if _bcrypt.checkpw(_pre_hash(plain_password), hashed_bytes):
             return True
     except Exception:
         pass
-    # Legacy scheme (backwards compatibility)
+    # Legacy scheme: raw password (handles accounts hashed with old passlib code)
     try:
-        return pwd_context.verify(plain_password, hashed_password)
+        return _bcrypt.checkpw(plain_password.encode('utf-8'), hashed_bytes)
     except Exception:
         return False
 
 
 def get_password_hash(password: str) -> str:
-    """Hash a password for storage using SHA-256 + bcrypt.
+    """Hash a password using SHA-256 + bcrypt.
     SHA-256 pre-hashing removes bcrypt's 72-byte limit so passwords of any
     length are accepted."""
-    return pwd_context.hash(_pre_hash(password))
+    salt = _bcrypt.gensalt()
+    return _bcrypt.hashpw(_pre_hash(password), salt).decode('utf-8')
 
 
 @app.post("/auth/check-username", response_model=UsernameCheckResponse, tags=["Authentication"])
