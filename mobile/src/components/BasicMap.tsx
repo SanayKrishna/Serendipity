@@ -156,6 +156,32 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     }
   }
 
+  // ── Procedural fog texture generator (called once, cached) ─────────────────
+  var _fogTexCanvas=null;
+  function _getFogPattern(ctx){
+    if(!_fogTexCanvas){
+      var S=256; _fogTexCanvas=document.createElement('canvas'); _fogTexCanvas.width=S; _fogTexCanvas.height=S;
+      var tc=_fogTexCanvas.getContext('2d'); var img=tc.createImageData(S,S); var d=img.data;
+      // Seeded PRNG for deterministic noise
+      var seed=42; function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647;}
+      // Tileable value-noise grid
+      var G=8,grid=[]; for(var gi=0;gi<G;gi++){grid[gi]=[]; for(var gj=0;gj<G;gj++) grid[gi][gj]=rnd();}
+      function smoothstep(t){return t*t*(3-2*t);}
+      function noise(x,y){ var gx=((x%1)+1)%1*G,gy=((y%1)+1)%1*G; var ix=Math.floor(gx)%G,iy=Math.floor(gy)%G;
+        var fx=smoothstep(gx-Math.floor(gx)),fy=smoothstep(gy-Math.floor(gy));
+        var a=grid[ix][iy],b=grid[(ix+1)%G][iy],c=grid[ix][(iy+1)%G],dd=grid[(ix+1)%G][(iy+1)%G];
+        return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c*(1-fx)*fy+dd*fx*fy; }
+      for(var py=0;py<S;py++){for(var px=0;px<S;px++){
+        var nx=px/S,ny=py/S;
+        var v=noise(nx,ny)*0.50+noise(nx*2.3,ny*2.3)*0.30+noise(nx*5.1,ny*5.1)*0.20;
+        var alpha=0.52+v*0.38; // range 0.52–0.90, avg ≈0.72
+        var idx=(py*S+px)*4; d[idx]=15;d[idx+1]=20;d[idx+2]=35;d[idx+3]=Math.floor(alpha*255);
+      }}
+      tc.putImageData(img,0,0);
+    }
+    return ctx.createPattern(_fogTexCanvas,'repeat');
+  }
+
   function drawFog(){
     var w=mapWrapper.offsetWidth, h=mapWrapper.offsetHeight;
     fogCanvas.width=w; fogCanvas.height=h;
@@ -170,10 +196,15 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
       }
     }
     if(nearDist>50){ fogCanvas.style.opacity='0'; return; }
-    // Fog active — dark overlay
+    // Fog active — textured organic overlay with slow drift
     fogCanvas.style.opacity='1';
-    fogCtx.fillStyle='rgba(15,20,35,0.72)';
-    fogCtx.fillRect(0,0,w,h);
+    var fogPat=_getFogPattern(fogCtx);
+    var driftT=Date.now()*0.0001;
+    fogCtx.save();
+    fogCtx.translate(Math.sin(driftT*0.7)*15,Math.cos(driftT)*12);
+    fogCtx.fillStyle=fogPat||'rgba(15,20,35,0.72)';
+    fogCtx.fillRect(-20,-20,w+40,h+40);
+    fogCtx.restore();
     // Build composite mask on offscreen canvas so overlapping circles merge cleanly
     // Using 'lighter' composite makes overlapping gradient edges add up (max-like)
     // instead of creating dark Venn-diagram seams.

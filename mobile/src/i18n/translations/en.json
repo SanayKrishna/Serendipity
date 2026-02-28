@@ -253,5 +253,16 @@
     "passwordTooLong": "Password is too long — please keep it under 64 characters",
     "rememberMe": "Remember me",
     "welcomeToFog": "Welcome to the Fog, {{name}}"
+  },
+  "tutorial": {
+    "mapTitle": "Your Fog-Shrouded Map",
+    "mapDesc": "Walk around to reveal the map through the fog. Explore to discover hidden messages left by other adventurers.",
+    "dropTitle": "Drop a Message",
+    "dropDesc": "Tap here to leave a message at your current location. Others can discover it when they pass by!",
+    "menuTitle": "Open the Menu",
+    "menuDesc": "Access your Diary, Community hub, Settings, and more from the side menu.",
+    "skip": "Skip",
+    "next": "Next",
+    "done": "Let's Go!"
   }
 }

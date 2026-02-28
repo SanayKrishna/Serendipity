@@ -13,7 +13,7 @@
  * - Settings - Language and preferences
  */
 import React, { useEffect, useState, useRef, createContext } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Animated } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Animated, Dimensions } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -30,6 +30,11 @@ import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiShadows } from '
 import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authService } from '../services/AuthService';
+
+let LottieView: any = null;
+try { LottieView = require('lottie-react-native'); if (LottieView && LottieView.default) LottieView = LottieView.default; } catch (_) {}
+
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 const Drawer = createDrawerNavigator();
 const Stack = createStackNavigator();
@@ -133,6 +138,20 @@ const AppNavigator: React.FC = () => {
   const [showWelcome, setShowWelcome] = useState(false);
   const [welcomeName, setWelcomeName] = useState('');
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
+
+  // Cherry-blossom petal particles
+  const blossomRefs = useRef(
+    Array.from({ length: 8 }, () => ({
+      x: Math.random() * SCREEN_W,
+      startY: -30 - Math.random() * 80,
+      endY: SCREEN_H + 40,
+      sway: (Math.random() - 0.5) * 100,
+      duration: 2800 + Math.random() * 1400,
+      delay: Math.random() * 700,
+      scale: 0.5 + Math.random() * 0.7,
+      anim: new Animated.Value(0),
+    })),
+  ).current;
   
   useEffect(() => {
     checkAuthStatus();
@@ -169,9 +188,21 @@ const AppNavigator: React.FC = () => {
     setWelcomeName(user?.username || '');
     setIsAuthenticated(true);
     setShowWelcome(true);
+
+    // Start blossom particle animations
+    blossomRefs.forEach((b) => {
+      b.anim.setValue(0);
+      Animated.timing(b.anim, {
+        toValue: 1,
+        duration: b.duration,
+        delay: b.delay,
+        useNativeDriver: true,
+      }).start();
+    });
+
     Animated.sequence([
       Animated.timing(welcomeOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-      Animated.delay(2000),
+      Animated.delay(2200),
       Animated.timing(welcomeOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
     ]).start(() => setShowWelcome(false));
   };
@@ -215,9 +246,41 @@ const AppNavigator: React.FC = () => {
       {isAuthenticated ? (
         <AuthContext.Provider value={{ logout: handleLogout }}>
           <DrawerNavigator />
-          {/* Welcome overlay — fades in briefly after login */}
+          {/* Welcome overlay — Lottie animation + cherry blossom petals */}
           {showWelcome && (
             <Animated.View style={[styles.welcomeOverlay, { opacity: welcomeOpacity }]} pointerEvents="none">
+              {/* Lottie zen ripple animation (placeholder — swap with premium later) */}
+              {LottieView && (
+                <LottieView
+                  source={require('../../assets/lottie/welcome.json')}
+                  autoPlay
+                  loop={false}
+                  speed={0.8}
+                  style={styles.welcomeLottie}
+                />
+              )}
+
+              {/* Floating cherry-blossom petals */}
+              {blossomRefs.map((b, i) => {
+                const translateY = b.anim.interpolate({ inputRange: [0, 1], outputRange: [b.startY, b.endY] });
+                const translateX = b.anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [b.x, b.x + b.sway, b.x - b.sway * 0.4] });
+                const rotate = b.anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+                const opacity = b.anim.interpolate({ inputRange: [0, 0.08, 0.7, 1], outputRange: [0, 0.85, 0.85, 0] });
+                return (
+                  <Animated.Text
+                    key={i}
+                    style={{
+                      position: 'absolute',
+                      fontSize: 20,
+                      transform: [{ translateX }, { translateY }, { rotate }, { scale: b.scale }],
+                      opacity,
+                    }}
+                  >
+                    🌸
+                  </Animated.Text>
+                );
+              })}
+
               <Text style={styles.welcomeJp}>ようこそ</Text>
               <Text style={styles.welcomeEn}>
                 {welcomeName
@@ -263,6 +326,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 9999,
+  },
+  welcomeLottie: {
+    position: 'absolute',
+    width: 260,
+    height: 260,
+    opacity: 0.5,
   },
   welcomeJp: {
     fontSize: 36,

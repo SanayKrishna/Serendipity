@@ -568,8 +568,25 @@ async def discover_pins(
             ).all()
             device_interactions = {row.pin_id: row.interaction_type for row in interaction_rows}
         
+        # Build optional exclusion clause: hide pins the user disliked
+        dislike_clause = ""
+        query_params = {
+            "lat": lat,
+            "lon": lon,
+            "radius": radius if radius is not None else settings.DISCOVERY_RADIUS_METERS,
+        }
+        if current_device:
+            dislike_clause = (
+                " AND p.id NOT IN ("
+                "SELECT pi.pin_id FROM pin_interactions pi "
+                "WHERE pi.device_db_id = :device_db_id "
+                "AND pi.interaction_type = 'dislike'"
+                ")"
+            )
+            query_params["device_db_id"] = current_device.id
+
         # Create a geography point from user's coordinates
-        query = text("""
+        query = text(f"""
             SELECT 
                 p.id,
                 p.content,
@@ -596,14 +613,12 @@ async def discover_pins(
                     ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                     :radius
                 )
+                {dislike_clause}
             ORDER BY distance_meters ASC
             LIMIT 50
         """)
         
-        result = db.execute(
-            query, 
-            {"lat": lat, "lon": lon, "radius": radius if radius is not None else settings.DISCOVERY_RADIUS_METERS}
-        )
+        result = db.execute(query, query_params)
         # Note: passes_by column may not exist yet until migration runs – handled with getattr
         
         pins = []

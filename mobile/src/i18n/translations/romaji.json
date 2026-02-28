@@ -109,5 +109,16 @@
     "english": "English",
     "japanese": "日本語",
     "romaji": "Rōmaji"
+  },
+  "tutorial": {
+    "mapTitle": "Kiri ni tsutsumareta chizu",
+    "mapDesc": "Aruite kiri wo harashi, chizu wo tansaku shimashō. Hoka no bōkensha ga nokoshita kakusareta messēji wo hakken dekimasu.",
+    "dropTitle": "Messēji wo nokosu",
+    "dropDesc": "Koko wo tappu shite, genzaichi ni messēji wo nokoshimashō. Tōrikakatta hito ga hakken dekimasu!",
+    "menuTitle": "Menyū wo hiraku",
+    "menuDesc": "Saido menyū kara nikki, komyuniti, settei nado ni akusesu dekimasu.",
+    "skip": "Sukippu",
+    "next": "Tsugi e",
+    "done": "Sā, hajimeyō!"
   }
 }

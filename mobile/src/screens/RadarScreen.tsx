@@ -34,6 +34,7 @@ import apiService, { DiscoveredPin } from '../services/ApiService';
 import pinPreferencesService from '../services/PinPreferencesService';
 import { BasicMap, ExploredCircle } from '../components';
 import { SimpleConfirmDialog } from '../components/SimpleConfirmDialog';
+import TutorialOverlay, { useShouldShowTutorial } from '../components/TutorialOverlay';
 import { MiyabiColors, MiyabiSpacing, MiyabiShadows } from '../styles/miyabi';
 import { reverseGeocode, forwardGeocode, GeocodeResult } from '../services/LocationIQService';
 
@@ -644,6 +645,7 @@ const CommunityHubSheet: React.FC<{
 const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { t } = useTranslation();
   const [isSearching, setIsSearching] = useState(false);
+  const [showTutorial, dismissTutorial] = useShouldShowTutorial();
   const [location, setLocation] = useState<LocationCoords | null>(null);
   const [discoveredPins, setDiscoveredPins] = useState<DiscoveredPin[]>([]);
   const [mapPins, setMapPins] = useState<MapPin[]>([]);
@@ -1495,6 +1497,11 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         onConfirm={handleDialogConfirm}
         onCancel={dismissDialog}
       />
+
+      {/* Ghost Guide — first-time user onboarding tutorial */}
+      {showTutorial && (
+        <TutorialOverlay onComplete={dismissTutorial} />
+      )}
     </SafeAreaView>
   );
 };
