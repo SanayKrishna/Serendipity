@@ -349,7 +349,7 @@ const AppNavigator: React.FC = () => {
                     style={{
                       position: 'absolute', top: w.y, left: -20,
                       width: SCREEN_W + 40, height: w.height,
-                      backgroundColor: 'rgba(240,240,245,0.25)',
+                      backgroundColor: 'rgba(180,195,220,0.12)',
                       borderRadius: w.height / 2,
                       transform: [{ translateX: tx }], opacity: op,
                     }}
@@ -436,7 +436,7 @@ const styles = StyleSheet.create({
   },
   welcomeOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(220,225,235,0.97)',
+    backgroundColor: 'rgba(15,20,35,0.92)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 9999,
@@ -447,7 +447,7 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: SCREEN_W * 0.65,
-    backgroundColor: 'rgba(235,238,245,0.95)',
+    backgroundColor: 'rgba(160,175,200,0.25)',
   },
   cloudBankLeft: {
     left: 0,
@@ -461,27 +461,27 @@ const styles = StyleSheet.create({
   },
   cloudBlob: {
     position: 'absolute',
-    backgroundColor: 'rgba(245,245,250,0.8)',
+    backgroundColor: 'rgba(180,195,220,0.20)',
     borderRadius: 80,
   },
   welcomeJp: {
     fontSize: 42,
     fontWeight: '200',
-    color: 'rgba(45,90,61,0.9)',
+    color: 'rgba(200,230,210,0.9)',
     letterSpacing: 12,
     marginBottom: 4,
   },
   welcomeJpSub: {
     fontSize: 13,
     fontWeight: '400',
-    color: 'rgba(45,90,61,0.5)',
+    color: 'rgba(200,230,210,0.45)',
     letterSpacing: 4,
     marginBottom: 16,
   },
   welcomeEn: {
     fontSize: 15,
     fontWeight: '500',
-    color: 'rgba(45,90,61,0.65)',
+    color: 'rgba(200,230,210,0.6)',
     letterSpacing: 1,
   },
   drawer: {

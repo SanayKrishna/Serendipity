@@ -139,9 +139,9 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
         var nx=px/S,ny=py/S;
         var v=noise(nx,ny)*0.50+noise(nx*2.3,ny*2.3)*0.30+noise(nx*5.1,ny*5.1)*0.20;
         // White-grey cloud tones: RGB 210-250, alpha 0.45-0.85
-        var lum=Math.floor(210+v*40);            // 210..250 — bright white/grey
-        var alpha=Math.floor((0.45+v*0.40)*255); // 115..217 — organic density variation
-        var idx=(py*S+px)*4; d[idx]=lum; d[idx+1]=lum; d[idx+2]=Math.min(255,lum+8); d[idx+3]=alpha;
+        var lum=Math.floor(140+v*50);            // 140..190 — medium grey fog
+        var alpha=Math.floor((0.55+v*0.35)*255); // 140..229 — denser coverage
+        var idx=(py*S+px)*4; d[idx]=lum; d[idx+1]=lum; d[idx+2]=Math.min(255,lum+5); d[idx+3]=alpha;
       }}
       tc.putImageData(img,0,0);
     }
@@ -206,7 +206,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     var driftT=Date.now()*0.00008;
     cloudCtx.save();
     cloudCtx.translate(Math.sin(driftT*0.7)*20,Math.cos(driftT)*16);
-    cloudCtx.fillStyle=cloudPat||'rgba(230,230,235,0.55)';
+    cloudCtx.fillStyle=cloudPat||'rgba(160,165,170,0.65)';
     cloudCtx.fillRect(-30,-30,w+60,h+60);
     cloudCtx.restore();
     cloudCtx.globalCompositeOperation='destination-in';

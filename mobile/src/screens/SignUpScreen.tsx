@@ -22,6 +22,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path, Circle as SvgCircle } from 'react-native-svg';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiTypography, MiyabiShadows } from '../styles/miyabi';
 import { AppLogo } from '../components/AppLogo';
 import { getAuthApiUrl } from '../config/api';
@@ -43,6 +44,7 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isConfirmPasswordVisible, setIsConfirmPasswordVisible] = useState(false);
   const [selectedIcon, setSelectedIcon] = useState(PROFILE_ICON_DEFS[0].id);
+  const [rememberMe, setRememberMe] = useState(false);
   
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
   const [usernameChecking, setUsernameChecking] = useState(false);
@@ -158,6 +160,7 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
         username,
         rawPassword,
         selectedIcon,
+        rememberMe,
       );
 
       if (!result.success) {
@@ -273,7 +276,18 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
                   onPress={() => setIsPasswordVisible(!isPasswordVisible)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Text style={styles.eyeIcon}>{isPasswordVisible ? '👁' : '👁‍🗨'}</Text>
+                  {isPasswordVisible ? (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                      <SvgCircle cx={12} cy={12} r={3} stroke={MiyabiColors.sumiLight} strokeWidth={1.5} />
+                    </Svg>
+                  ) : (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                      <SvgCircle cx={12} cy={12} r={3} stroke={MiyabiColors.sumiLight} strokeWidth={1.5} />
+                      <Path d="M4.93 4.93l14.14 14.14" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" />
+                    </Svg>
+                  )}
                 </TouchableOpacity>
               </View>
               {/* Password strength meter */}
@@ -313,7 +327,18 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
                   onPress={() => setIsConfirmPasswordVisible(!isConfirmPasswordVisible)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Text style={styles.eyeIcon}>{isConfirmPasswordVisible ? '👁' : '👁‍🗨'}</Text>
+                  {isConfirmPasswordVisible ? (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                      <SvgCircle cx={12} cy={12} r={3} stroke={MiyabiColors.sumiLight} strokeWidth={1.5} />
+                    </Svg>
+                  ) : (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                      <SvgCircle cx={12} cy={12} r={3} stroke={MiyabiColors.sumiLight} strokeWidth={1.5} />
+                      <Path d="M4.93 4.93l14.14 14.14" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" />
+                    </Svg>
+                  )}
                 </TouchableOpacity>
               </View>
               {/* Mismatch hint (shown only when both fields have content) */}
@@ -351,6 +376,18 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
                 })}
               </ScrollView>
             </View>
+
+            {/* Remember Me */}
+            <TouchableOpacity
+              style={styles.rememberRow}
+              onPress={() => setRememberMe(!rememberMe)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.rememberCheckbox, rememberMe && styles.rememberCheckboxChecked]}>
+                {rememberMe && <Text style={styles.rememberCheck}>✓</Text>}
+              </View>
+              <Text style={styles.rememberText}>{t('auth.rememberMe')}</Text>
+            </TouchableOpacity>
             
             {/* Error message */}
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -578,6 +615,37 @@ const styles = StyleSheet.create({
   langSep: {
     fontSize: 12,
     color: MiyabiColors.divider,
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: MiyabiSpacing.lg,
+    marginTop: MiyabiSpacing.xs,
+  },
+  rememberCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: MiyabiColors.sumiLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: MiyabiSpacing.sm,
+    backgroundColor: MiyabiColors.cardBackground,
+  },
+  rememberCheckboxChecked: {
+    backgroundColor: MiyabiColors.bamboo,
+    borderColor: MiyabiColors.bamboo,
+  },
+  rememberCheck: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
+    marginTop: -1,
+  },
+  rememberText: {
+    fontSize: MiyabiTypography.fontSize.sm,
+    color: MiyabiColors.sumiLight,
   },
 });
 

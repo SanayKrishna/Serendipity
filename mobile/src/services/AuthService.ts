@@ -319,7 +319,8 @@ class AuthService {
     email: string,
     username: string,
     password: string,
-    profileIcon: string
+    profileIcon: string,
+    rememberMe: boolean = false
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const apiUrl = getAuthApiUrl();
@@ -348,16 +349,18 @@ class AuthService {
 
       const data = await response.json();
 
-      // Store user data and token
-      await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify({
-        user_id: data.user_id,
-        email: data.email,
-        username: data.username,
-        profile_icon: data.profile_icon,
-      }));
-      await AsyncStorage.setItem(EMAIL_AUTH_TOKEN_KEY, data.token);
+      // Only persist session to disk if "Remember Me" is checked
+      if (rememberMe) {
+        await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify({
+          user_id: data.user_id,
+          email: data.email,
+          username: data.username,
+          profile_icon: data.profile_icon,
+        }));
+        await AsyncStorage.setItem(EMAIL_AUTH_TOKEN_KEY, data.token);
+      }
 
-      // Update current user
+      // Update current user (in-memory for this session)
       this.currentUser = {
         id: data.user_id,
         authType: 'email',
@@ -382,7 +385,7 @@ class AuthService {
   async login(
     identifier: string,
     password: string,
-    rememberMe: boolean = true
+    rememberMe: boolean = false
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const apiUrl = getAuthApiUrl();
@@ -408,16 +411,18 @@ class AuthService {
 
       const data = await response.json();
 
-      // Store user data and token
-      await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify({
-        user_id: data.user_id,
-        email: data.email,
-        username: data.username,
-        profile_icon: data.profile_icon,
-      }));
-      await AsyncStorage.setItem(EMAIL_AUTH_TOKEN_KEY, data.token);
+      // Only persist session to disk if "Remember Me" is checked
+      if (rememberMe) {
+        await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify({
+          user_id: data.user_id,
+          email: data.email,
+          username: data.username,
+          profile_icon: data.profile_icon,
+        }));
+        await AsyncStorage.setItem(EMAIL_AUTH_TOKEN_KEY, data.token);
+      }
 
-      // Update current user
+      // Update current user (in-memory for this session)
       this.currentUser = {
         id: data.user_id,
         authType: 'email',

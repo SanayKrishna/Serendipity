@@ -20,6 +20,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path, Circle as SvgCircle } from 'react-native-svg';
 import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiTypography, MiyabiShadows } from '../styles/miyabi';
 import { AppLogo } from '../components/AppLogo';
 import { authService } from '../services/AuthService';
@@ -38,7 +39,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
   
   const handleLogin = async () => {
     setError('');
@@ -125,7 +126,18 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
                   onPress={() => setIsPasswordVisible(!isPasswordVisible)}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Text style={styles.eyeIcon}>{isPasswordVisible ? '👁' : '👁‍🗨'}</Text>
+                  {isPasswordVisible ? (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                      <SvgCircle cx={12} cy={12} r={3} stroke={MiyabiColors.sumiLight} strokeWidth={1.5} />
+                    </Svg>
+                  ) : (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                      <SvgCircle cx={12} cy={12} r={3} stroke={MiyabiColors.sumiLight} strokeWidth={1.5} />
+                      <Path d="M4.93 4.93l14.14 14.14" stroke={MiyabiColors.sumiLight} strokeWidth={1.5} strokeLinecap="round" />
+                    </Svg>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
