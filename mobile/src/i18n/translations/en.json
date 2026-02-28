@@ -222,6 +222,11 @@
     "appDescription": "Location-based discovery",
     "english": "English",
     "japanese": "日本語",
+    "editProfile": "Edit Profile",
+    "editProfileDesc": "Update your avatar and username",
+    "save": "Save Changes",
+    "saved": "Saved",
+    "usernameUnavailable": "This username is already taken",
     "logout": "Log Out",
     "cancel": "Cancel",
     "logoutConfirm": "Are you sure you want to log out?",
@@ -245,6 +250,8 @@
     "enterCredentials": "Please enter your credentials",
     "fillAllFields": "Please fill in all fields",
     "usernameTaken": "Username taken",
-    "passwordTooLong": "Password is too long — please keep it under 64 characters"
+    "passwordTooLong": "Password is too long — please keep it under 64 characters",
+    "rememberMe": "Remember me",
+    "welcomeToFog": "Welcome to the Fog, {{name}}"
   }
 }

@@ -236,7 +236,7 @@ const BottomSheet: React.FC<{
         {/* Message */}
         <Text style={styles.bottomSheetMessage}>{pin.content}</Text>
 
-        {/* Stats — 2×2 grid */}
+        {/* Stats — role-based grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statChip}>
             <Text style={styles.statChipIcon}>❤️</Text>
@@ -246,55 +246,63 @@ const BottomSheet: React.FC<{
             <Text style={styles.statChipIcon}>👣</Text>
             <Text style={styles.statChipText}>{pin.passes_by ?? 0} {t('radar.passed')}</Text>
           </View>
-          <View style={styles.statChip}>
-            <Text style={styles.statChipIcon}>🚩</Text>
-            <Text style={styles.statChipText}>{pin.reports} {t('radar.reports')}</Text>
-          </View>
+          {pin.is_own_pin && (
+            <View style={styles.statChip}>
+              <Text style={styles.statChipIcon}>🚩</Text>
+              <Text style={styles.statChipText}>{pin.reports} {t('radar.reports')}</Text>
+            </View>
+          )}
           <View style={styles.statChip}>
             <Text style={styles.statChipIcon}>⏳</Text>
             <Text style={styles.statChipText} numberOfLines={1}>{t('radar.expires')} {expiresStr}</Text>
           </View>
         </View>
 
-        {/* Actions row 1: Like + Dislike */}
-        <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#1B5E20' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
-            onPress={() => onLike(pin.id)}
-            activeOpacity={0.8}
-            disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
-          >
-            <Text style={styles.likeButtonText}>❤️ {t('radar.like')}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.dislikeButton, userInteraction === 'disliked' && { backgroundColor: '#FFCDD2', borderColor: '#EF9A9A' }, (userInteraction === 'liked' || userInteraction === 'reported') && { opacity: 0.4 }]}
-            onPress={() => onDislike(pin.id)}
-            activeOpacity={0.8}
-            disabled={userInteraction === 'liked' || userInteraction === 'reported'}
-          >
-            <Text style={styles.dislikeButtonText}>💔 {t('radar.dislike')}</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Actions — role-based: creator sees Delete only, viewer sees Like/Dislike/Report */}
+        {pin.is_own_pin ? (
+          <>
+            {onDelete && (
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={() => onDelete(pin.id)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.deleteButtonText}>🗑️ {t('radar.deleteBtn')}</Text>
+              </TouchableOpacity>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Actions row 1: Like + Dislike */}
+            <View style={styles.actionsRow}>
+              <TouchableOpacity
+                style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#1B5E20' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+                onPress={() => onLike(pin.id)}
+                activeOpacity={0.8}
+                disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
+              >
+                <Text style={styles.likeButtonText}>❤️ {t('radar.like')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.dislikeButton, userInteraction === 'disliked' && { backgroundColor: '#FFCDD2', borderColor: '#EF9A9A' }, (userInteraction === 'liked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+                onPress={() => onDislike(pin.id)}
+                activeOpacity={0.8}
+                disabled={userInteraction === 'liked' || userInteraction === 'reported'}
+              >
+                <Text style={styles.dislikeButtonText}>💔 {t('radar.dislike')}</Text>
+              </TouchableOpacity>
+            </View>
 
-        {/* Actions row 2: Report (full width) */}
-        <TouchableOpacity
-          style={[styles.reportButton, userInteraction === 'reported' && { backgroundColor: '#FFE0B2', borderColor: '#FFCC80' }, (userInteraction === 'liked' || userInteraction === 'disliked') && { opacity: 0.4 }]}
-          onPress={() => onReport(pin.id)}
-          activeOpacity={0.8}
-          disabled={userInteraction === 'liked' || userInteraction === 'disliked'}
-        >
-          <Text style={styles.reportButtonText}>🚩 {t('radar.reportBtn')}</Text>
-        </TouchableOpacity>
-
-        {/* Delete — only for own pins */}
-        {pin.is_own_pin && onDelete && (
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() => onDelete(pin.id)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.deleteButtonText}>🗑️ {t('radar.deleteBtn')}</Text>
-          </TouchableOpacity>
+            {/* Actions row 2: Report (full width) */}
+            <TouchableOpacity
+              style={[styles.reportButton, userInteraction === 'reported' && { backgroundColor: '#FFE0B2', borderColor: '#FFCC80' }, (userInteraction === 'liked' || userInteraction === 'disliked') && { opacity: 0.4 }]}
+              onPress={() => onReport(pin.id)}
+              activeOpacity={0.8}
+              disabled={userInteraction === 'liked' || userInteraction === 'disliked'}
+            >
+              <Text style={styles.reportButtonText}>🚩 {t('radar.reportBtn')}</Text>
+            </TouchableOpacity>
+          </>
         )}
 
         <View style={{ height: 24 }} />
@@ -464,16 +472,18 @@ const CommunityHubSheet: React.FC<{
               </View>
             </View>
 
-            {/* Actions */}
+            {/* Actions — role-based */}
             <View style={styles.actionsRow}>
-              <TouchableOpacity
-                style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#1B5E20' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
-                onPress={() => onLike(pin.id)}
-                activeOpacity={0.8}
-                disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
-              >
-                <Text style={styles.likeButtonText}>❤️ {t('radar.like')}</Text>
-              </TouchableOpacity>
+              {!pin.is_own_pin && (
+                <TouchableOpacity
+                  style={[styles.likeButton, userInteraction === 'liked' && { backgroundColor: '#1B5E20' }, (userInteraction === 'disliked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+                  onPress={() => onLike(pin.id)}
+                  activeOpacity={0.8}
+                  disabled={userInteraction === 'disliked' || userInteraction === 'reported'}
+                >
+                  <Text style={styles.likeButtonText}>❤️ {t('radar.like')}</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={[styles.checkInButton, { backgroundColor: within200 ? color : '#E0E0E0' }]}
                 disabled={!within200}
@@ -484,14 +494,16 @@ const CommunityHubSheet: React.FC<{
                 </Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={[styles.reportButton, userInteraction === 'reported' && { backgroundColor: '#FFE0B2', borderColor: '#FFCC80' }, (userInteraction === 'liked' || userInteraction === 'disliked') && { opacity: 0.4 }]}
-              onPress={() => onReport(pin.id)}
-              activeOpacity={0.8}
-              disabled={userInteraction === 'liked' || userInteraction === 'disliked'}
-            >
-              <Text style={styles.reportButtonText}>🚩 {t('radar.reportBtn')}</Text>
-            </TouchableOpacity>
+            {!pin.is_own_pin && (
+              <TouchableOpacity
+                style={[styles.reportButton, userInteraction === 'reported' && { backgroundColor: '#FFE0B2', borderColor: '#FFCC80' }, (userInteraction === 'liked' || userInteraction === 'disliked') && { opacity: 0.4 }]}
+                onPress={() => onReport(pin.id)}
+                activeOpacity={0.8}
+                disabled={userInteraction === 'liked' || userInteraction === 'disliked'}
+              >
+                <Text style={styles.reportButtonText}>🚩 {t('radar.reportBtn')}</Text>
+              </TouchableOpacity>
+            )}
             {pin.is_own_pin && onDelete && (
               <TouchableOpacity style={styles.deleteButton} onPress={() => onDelete(pin.id)} activeOpacity={0.8}>
                 <Text style={styles.deleteButtonText}>🗑️ {t('radar.deleteBtn')}</Text>
@@ -608,15 +620,17 @@ const CommunityHubSheet: React.FC<{
               )}
             </View>
 
-            {/* Dislike + report */}
-            <TouchableOpacity
-              style={[styles.dislikeButton, userInteraction === 'disliked' && { backgroundColor: '#FFCDD2', borderColor: '#EF9A9A' }, (userInteraction === 'liked' || userInteraction === 'reported') && { opacity: 0.4 }]}
-              onPress={() => onDislike(pin.id)}
-              activeOpacity={0.8}
-              disabled={userInteraction === 'liked' || userInteraction === 'reported'}
-            >
-              <Text style={styles.dislikeButtonText}>💔 {t('radar.dislike')}</Text>
-            </TouchableOpacity>
+            {/* Dislike + report — viewers only */}
+            {!pin.is_own_pin && (
+              <TouchableOpacity
+                style={[styles.dislikeButton, userInteraction === 'disliked' && { backgroundColor: '#FFCDD2', borderColor: '#EF9A9A' }, (userInteraction === 'liked' || userInteraction === 'reported') && { opacity: 0.4 }]}
+                onPress={() => onDislike(pin.id)}
+                activeOpacity={0.8}
+                disabled={userInteraction === 'liked' || userInteraction === 'reported'}
+              >
+                <Text style={styles.dislikeButtonText}>💔 {t('radar.dislike')}</Text>
+              </TouchableOpacity>
+            )}
           </>
         )}
 
@@ -653,6 +667,8 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const dismissedPinIds = useRef<Set<number>>(new Set()).current;
   // Per-pin interaction tracking: liked | disliked | reported | null
   const [pinInteractions, setPinInteractions] = useState<Record<number, 'liked' | 'disliked' | 'reported' | null>>({});
+  // Track which pins have already had server interactions seeded (avoid re-overriding local undos)
+  const seededPinIds = useRef<Set<number>>(new Set()).current;
 
   // Community Hub: pins in the same zone (≤ 100m) as the selected community pin
   const [zonePins, setZonePins] = useState<DiscoveredPin[]>([]);
@@ -668,6 +684,26 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       setZonePins([]);
     }
   }, [selectedPin, discoveredPins]);
+
+  // Seed pinInteractions from server-side user_interaction field (once per pin)
+  useEffect(() => {
+    const INTERACTION_MAP: Record<string, 'liked' | 'disliked' | 'reported'> = {
+      like: 'liked', dislike: 'disliked', report: 'reported',
+    };
+    const updates: Record<number, 'liked' | 'disliked' | 'reported'> = {};
+    discoveredPins.forEach(p => {
+      if (p.user_interaction && !seededPinIds.has(p.id)) {
+        const mapped = INTERACTION_MAP[p.user_interaction];
+        if (mapped) {
+          updates[p.id] = mapped;
+          seededPinIds.add(p.id);
+        }
+      }
+    });
+    if (Object.keys(updates).length > 0) {
+      setPinInteractions(prev => ({ ...prev, ...updates }));
+    }
+  }, [discoveredPins]);
 
   // LocationIQ search
   const [flyToLocation, setFlyToLocation] = useState<{ lat: number; lon: number; label?: string } | null>(null);
@@ -915,7 +951,6 @@ const RadarScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
     // Fly camera to user's current location
     setFlyToLocation({ lat: location.latitude, lon: location.longitude });
     
-    setDiscoveredPins([]);
     try {
       const response = await apiService.discoverPins(
         location.latitude,

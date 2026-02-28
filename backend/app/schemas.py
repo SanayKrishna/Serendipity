@@ -53,6 +53,31 @@ class LoginRequest(BaseModel):
     password: str = Field(..., description="Password")
 
 
+class UpdateProfileRequest(BaseModel):
+    """Schema for updating user profile"""
+    user_id: int = Field(..., description="User ID to update")
+    username: Optional[str] = Field(None, min_length=3, max_length=15, description="New username")
+    profile_icon: Optional[str] = Field(None, description="New profile icon ID")
+
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, v):
+        if v is not None:
+            if not v.islower():
+                raise ValueError('Username must be lowercase')
+            if not v.isalnum():
+                raise ValueError('Username must be alphanumeric')
+        return v
+
+
+class UpdateProfileResponse(BaseModel):
+    """Response for profile update"""
+    user_id: int
+    username: str
+    profile_icon: str
+    message: str
+
+
 class AuthResponse(BaseModel):
     """Schema for authentication response"""
     user_id: int
@@ -117,6 +142,7 @@ class PinDiscovery(BaseModel):
     is_suppressed: bool
     is_community: bool
     is_own_pin: bool = Field(default=False, description="Whether this pin belongs to the current user")
+    user_interaction: Optional[str] = Field(None, description="Current user's interaction: 'like', 'dislike', 'report', or null")
     expires_at: datetime
     
     class Config:

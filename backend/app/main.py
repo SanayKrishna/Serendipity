@@ -47,6 +47,8 @@ from app.schemas import (
     SignUpRequest,
     LoginRequest,
     AuthResponse,
+    UpdateProfileRequest,
+    UpdateProfileResponse,
 )
 from app.config import settings
 from app.utils.content_filter import validate_content
@@ -473,6 +475,53 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
+@app.patch("/auth/profile", response_model=UpdateProfileResponse, tags=["Authentication"])
+async def update_profile(
+    request_data: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    ✏️ Update user profile (username and/or profile icon).
+
+    - **user_id**: ID of the user to update
+    - **username**: New username (optional, validated for uniqueness)
+    - **profile_icon**: New profile icon ID (optional)
+    """
+    try:
+        user = db.query(User).filter(User.id == request_data.user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if request_data.username is not None:
+            new_username = request_data.username.lower()
+            if new_username != user.username:
+                existing = db.query(User).filter(User.username == new_username).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail="Username already taken")
+                user.username = new_username
+
+        if request_data.profile_icon is not None:
+            user.profile_icon = request_data.profile_icon
+
+        db.commit()
+        db.refresh(user)
+
+        log_event("PROFILE_UPDATE", f"User profile updated: {user.username}", user_id=user.id)
+
+        return UpdateProfileResponse(
+            user_id=user.id,
+            username=user.username,
+            profile_icon=user.profile_icon,
+            message="Profile updated successfully",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        log_error("PROFILE_UPDATE", f"Failed to update profile: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+
+
 # ============================================
 # DISCOVER ENDPOINT
 # ============================================
@@ -508,6 +557,16 @@ async def discover_pins(
                 Device.device_id == x_device_id,
                 Device.auth_type == auth_type
             ).first()
+        
+        # Batch-query all interactions for this device so we can tag each pin
+        device_interactions = {}
+        if current_device:
+            interaction_rows = db.query(
+                PinInteraction.pin_id, PinInteraction.interaction_type
+            ).filter(
+                PinInteraction.device_db_id == current_device.id
+            ).all()
+            device_interactions = {row.pin_id: row.interaction_type for row in interaction_rows}
         
         # Create a geography point from user's coordinates
         query = text("""
@@ -563,6 +622,7 @@ async def discover_pins(
                 is_suppressed=row.is_suppressed,
                 is_community=row.is_community,
                 is_own_pin=is_own_pin,
+                user_interaction=device_interactions.get(row.id),
                 expires_at=row.expires_at
             ))
         

@@ -12,8 +12,8 @@
  * - Diary - Personal discovery timeline
  * - Settings - Language and preferences
  */
-import React, { useEffect, useState, createContext } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState, useRef, createContext } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, Animated } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -127,8 +127,12 @@ const DrawerNavigator: React.FC = () => {
 };
 
 const AppNavigator: React.FC = () => {
+  const { t } = useTranslation();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [welcomeName, setWelcomeName] = useState('');
+  const welcomeOpacity = useRef(new Animated.Value(0)).current;
   
   useEffect(() => {
     checkAuthStatus();
@@ -161,7 +165,15 @@ const AppNavigator: React.FC = () => {
   };
   
   const handleAuthSuccess = () => {
+    const user = authService.getUser();
+    setWelcomeName(user?.username || '');
     setIsAuthenticated(true);
+    setShowWelcome(true);
+    Animated.sequence([
+      Animated.timing(welcomeOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+      Animated.delay(2000),
+      Animated.timing(welcomeOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
+    ]).start(() => setShowWelcome(false));
   };
 
   /** Full logout: clear session + guest flag, reset auth state.
@@ -203,6 +215,17 @@ const AppNavigator: React.FC = () => {
       {isAuthenticated ? (
         <AuthContext.Provider value={{ logout: handleLogout }}>
           <DrawerNavigator />
+          {/* Welcome overlay — fades in briefly after login */}
+          {showWelcome && (
+            <Animated.View style={[styles.welcomeOverlay, { opacity: welcomeOpacity }]} pointerEvents="none">
+              <Text style={styles.welcomeJp}>ようこそ</Text>
+              <Text style={styles.welcomeEn}>
+                {welcomeName
+                  ? t('auth.welcomeToFog', { name: welcomeName })
+                  : t('auth.welcomeBack')}
+              </Text>
+            </Animated.View>
+          )}
         </AuthContext.Provider>
       ) : (
         <Stack.Navigator
@@ -233,6 +256,26 @@ const styles = StyleSheet.create({
     backgroundColor: MiyabiColors.washi,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  welcomeOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,20,35,0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  welcomeJp: {
+    fontSize: 36,
+    fontWeight: '300',
+    color: '#FFFFFF',
+    letterSpacing: 6,
+    marginBottom: 8,
+  },
+  welcomeEn: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: 1,
   },
   drawer: {
     backgroundColor: MiyabiColors.washi,

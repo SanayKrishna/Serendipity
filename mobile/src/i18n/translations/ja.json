@@ -220,6 +220,11 @@
     "appDescription": "位置情報で新しい出会いを",
     "english": "English",
     "japanese": "日本語",
+    "editProfile": "プロフィール編集",
+    "editProfileDesc": "アバターとユーザー名を変更",
+    "save": "変更を保存",
+    "saved": "保存しました",
+    "usernameUnavailable": "このユーザー名は既に使用されています",
     "logout": "ログアウト",
     "cancel": "キャンセル",
     "logoutConfirm": "ログアウトしてもよろしいですか？",
@@ -243,6 +248,8 @@
     "enterCredentials": "認証情報を入力してください",
     "fillAllFields": "すべてのフィールドを入力してください",
     "usernameTaken": "ユーザー名は使用済みです",
-    "passwordTooLong": "パスワードが長すぎます — 64文字以内にしてください"
+    "passwordTooLong": "パスワードが長すぎます — 64文字以内にしてください",
+    "rememberMe": "ログイン状態を保持",
+    "welcomeToFog": "霧の世界へようこそ、{{name}}"
   }
 }

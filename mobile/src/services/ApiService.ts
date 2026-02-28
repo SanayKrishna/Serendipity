@@ -40,6 +40,7 @@ export interface DiscoveredPin {
   is_suppressed: boolean;
   is_community?: boolean;
   is_own_pin?: boolean;
+  user_interaction?: string | null;
   expires_at: string;
 }
 
@@ -509,6 +510,19 @@ class ApiService {
       const response = await this.client.delete<{ message: string; pin_id: number }>(
         `/pin/${pinId}`
       );
+      return response.data;
+    });
+  }
+
+  /**
+   * Update user profile (username and/or profile icon)
+   */
+  async updateProfile(userId: number, username?: string, profileIcon?: string): Promise<any> {
+    return this.executeWithRetry(async () => {
+      const body: Record<string, any> = { user_id: userId };
+      if (username !== undefined) body.username = username;
+      if (profileIcon !== undefined) body.profile_icon = profileIcon;
+      const response = await this.client.patch('/auth/profile', body);
       return response.data;
     });
   }

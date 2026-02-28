@@ -174,20 +174,40 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     fogCanvas.style.opacity='1';
     fogCtx.fillStyle='rgba(15,20,35,0.72)';
     fogCtx.fillRect(0,0,w,h);
-    // Flashlight: 3-ring radial clearance at user GPS position
+    // Build composite mask on offscreen canvas so overlapping circles merge cleanly
+    // Using 'lighter' composite makes overlapping gradient edges add up (max-like)
+    // instead of creating dark Venn-diagram seams.
+    var mask=document.createElement('canvas'); mask.width=w; mask.height=h;
+    var mc=mask.getContext('2d');
+    // User flashlight circle (primary, full-strength)
     var pt=map.latLngToContainerPoint([userLat,userLon]);
     var r=metersToPixels(50,userLat);
+    var g=mc.createRadialGradient(pt.x,pt.y,0,pt.x,pt.y,r*1.15);
+    g.addColorStop(0,'rgba(255,255,255,1)');
+    g.addColorStop(0.30,'rgba(255,255,255,0.85)');
+    g.addColorStop(0.50,'rgba(255,255,255,0.45)');
+    g.addColorStop(0.70,'rgba(255,255,255,0.20)');
+    g.addColorStop(0.85,'rgba(255,255,255,0.08)');
+    g.addColorStop(1,'rgba(255,255,255,0)');
+    mc.beginPath(); mc.arc(pt.x,pt.y,r*1.15,0,Math.PI*2); mc.fillStyle=g; mc.fill();
+    // Explored-circle clearings — use 'lighter' so overlaps merge smoothly
+    if(exploredCircles&&exploredCircles.length>0){
+      mc.globalCompositeOperation='lighter';
+      for(var ci=0;ci<exploredCircles.length;ci++){
+        var ec=exploredCircles[ci];
+        var ept=map.latLngToContainerPoint([ec.lat,ec.lon]);
+        var er=metersToPixels(50,ec.lat);
+        var eg=mc.createRadialGradient(ept.x,ept.y,0,ept.x,ept.y,er*0.9);
+        eg.addColorStop(0,'rgba(255,255,255,0.55)');
+        eg.addColorStop(0.5,'rgba(255,255,255,0.25)');
+        eg.addColorStop(1,'rgba(255,255,255,0)');
+        mc.beginPath(); mc.arc(ept.x,ept.y,er*0.9,0,Math.PI*2); mc.fillStyle=eg; mc.fill();
+      }
+      mc.globalCompositeOperation='source-over';
+    }
+    // Stamp composite mask onto fog — punches a single unified hole
     fogCtx.globalCompositeOperation='destination-out';
-    var g=fogCtx.createRadialGradient(pt.x,pt.y,0,pt.x,pt.y,r*1.15);
-    g.addColorStop(0,'rgba(0,0,0,1)');
-    g.addColorStop(0.22,'rgba(0,0,0,0.92)');
-    g.addColorStop(0.28,'rgba(0,0,0,0.55)');
-    g.addColorStop(0.45,'rgba(0,0,0,0.50)');
-    g.addColorStop(0.55,'rgba(0,0,0,0.30)');
-    g.addColorStop(0.70,'rgba(0,0,0,0.25)');
-    g.addColorStop(0.85,'rgba(0,0,0,0.08)');
-    g.addColorStop(1,'rgba(0,0,0,0)');
-    fogCtx.beginPath(); fogCtx.arc(pt.x,pt.y,r*1.15,0,Math.PI*2); fogCtx.fillStyle=g; fogCtx.fill();
+    fogCtx.drawImage(mask,0,0);
     fogCtx.globalCompositeOperation='source-over';
   }
 
@@ -440,12 +460,22 @@ export const BasicMap: React.FC<BasicMapProps> = ({ userLocation, pins, onPinPre
   const webViewRef = useRef<WebView>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
+  // Location + pins + explored circles (heavy – triggers full pin re-render in WebView)
   useEffect(() => {
     if (userLocation && webViewRef.current && mapLoaded) {
       const message = JSON.stringify({ type: 'updateLocation', location: userLocation, pins, compassHeading, exploredCircles });
       try { webViewRef.current.postMessage(message); } catch (e) { /* swallow */ }
     }
-  }, [userLocation, pins, mapLoaded, compassHeading, exploredCircles]);
+  }, [userLocation, pins, mapLoaded, exploredCircles]);
+
+  // Heading-only update (lightweight – rotates avatar without re-rendering pins)
+  useEffect(() => {
+    if (webViewRef.current && mapLoaded && compassHeading !== undefined) {
+      try {
+        webViewRef.current.postMessage(JSON.stringify({ type: 'setHeading', heading: compassHeading }));
+      } catch (e) { /* swallow */ }
+    }
+  }, [compassHeading, mapLoaded]);
 
   // Fly map camera to a forward-geocoded location
   useEffect(() => {

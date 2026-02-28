@@ -381,7 +381,8 @@ class AuthService {
    */
   async login(
     identifier: string,
-    password: string
+    password: string,
+    rememberMe: boolean = true
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const apiUrl = getAuthApiUrl();
@@ -431,6 +432,54 @@ class AuthService {
       return { success: true };
     } catch (error: any) {
       console.error('❌ Login error:', error);
+      return { success: false, error: error.message || 'Network error' };
+    }
+  }
+
+  /**
+   * Update user profile (username and/or profile icon)
+   */
+  async updateProfile(
+    userId: number,
+    username?: string,
+    profileIcon?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const apiUrl = getAuthApiUrl();
+      const body: Record<string, any> = { user_id: userId };
+      if (username !== undefined) body.username = username;
+      if (profileIcon !== undefined) body.profile_icon = profileIcon;
+
+      const response = await fetch(`${apiUrl}/auth/profile`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        return { success: false, error: errorData.detail || 'Update failed' };
+      }
+
+      const data = await response.json();
+
+      // Update in-memory user
+      if (this.currentUser) {
+        if (data.username) this.currentUser.username = data.username;
+        if (data.profile_icon) this.currentUser.profileIcon = data.profile_icon;
+      }
+
+      // Update persisted session
+      const storedUserJson = await AsyncStorage.getItem(EMAIL_AUTH_USER_KEY);
+      if (storedUserJson) {
+        const stored = JSON.parse(storedUserJson);
+        if (data.username) stored.username = data.username;
+        if (data.profile_icon) stored.profile_icon = data.profile_icon;
+        await AsyncStorage.setItem(EMAIL_AUTH_USER_KEY, JSON.stringify(stored));
+      }
+
+      return { success: true };
+    } catch (error: any) {
       return { success: false, error: error.message || 'Network error' };
     }
   }

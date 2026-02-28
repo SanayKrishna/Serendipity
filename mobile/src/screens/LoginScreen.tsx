@@ -37,6 +37,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   
   const handleLogin = async () => {
     setError('');
@@ -50,7 +51,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
     setIsLoading(true);
     
     try {
-      const result = await authService.login(identifier, password);
+      const result = await authService.login(identifier, password, rememberMe);
       
       if (!result.success) {
         throw new Error(result.error || 'Login failed');
@@ -115,10 +116,21 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
                 secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
-                maxLength={64}
                 textContentType="password"
               />
             </View>
+
+            {/* Remember Me */}
+            <TouchableOpacity
+              style={styles.rememberRow}
+              onPress={() => setRememberMe(!rememberMe)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                {rememberMe && <Text style={styles.checkmark}>✓</Text>}
+              </View>
+              <Text style={styles.rememberText}>{t('auth.rememberMe')}</Text>
+            </TouchableOpacity>
             
             {/* Error message */}
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -228,6 +240,37 @@ const styles = StyleSheet.create({
     color: MiyabiColors.error,
     marginBottom: MiyabiSpacing.md,
     textAlign: 'center',
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: MiyabiSpacing.lg,
+    marginTop: MiyabiSpacing.xs,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: MiyabiColors.sumiLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: MiyabiSpacing.sm,
+    backgroundColor: MiyabiColors.cardBackground,
+  },
+  checkboxChecked: {
+    backgroundColor: MiyabiColors.bamboo,
+    borderColor: MiyabiColors.bamboo,
+  },
+  checkmark: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
+    marginTop: -1,
+  },
+  rememberText: {
+    fontSize: MiyabiTypography.fontSize.sm,
+    color: MiyabiColors.sumiLight,
   },
   submitButton: {
     backgroundColor: MiyabiColors.bamboo,
