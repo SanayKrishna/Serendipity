@@ -250,7 +250,9 @@
     "usernameTaken": "ユーザー名は使用済みです",
     "passwordTooLong": "パスワードが長すぎます — 64文字以内にしてください",
     "rememberMe": "ログイン状態を保持",
-    "welcomeToFog": "霧の世界へようこそ、{{name}}"
+    "welcomeToFog": "霧の世界へようこそ、{{name}}",
+    "confirmPassword": "パスワード確認",
+    "passwordsDoNotMatch": "パスワードが一致しません"
   },
   "tutorial": {
     "mapTitle": "霧に包まれた地図",

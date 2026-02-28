@@ -39,6 +39,9 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [isConfirmPasswordVisible, setIsConfirmPasswordVisible] = useState(false);
   const [selectedIcon, setSelectedIcon] = useState(PROFILE_ICON_DEFS[0].id);
   
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
@@ -133,6 +136,16 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
       .replace(/\p{Cf}/gu, '')        // Unicode Format chars (invisible, zero-width)
       .replace(/[\x00-\x1F\x7F]/g, '') // ASCII control chars
       .trim();
+
+    const rawConfirmPassword = confirmPassword
+      .replace(/\p{Cf}/gu, '')
+      .replace(/[\x00-\x1F\x7F]/g, '')
+      .trim();
+
+    if (rawPassword !== rawConfirmPassword) {
+      setError(t('auth.passwordsDoNotMatch'));
+      return;
+    }
 
     // No length limit — backend uses SHA-256 pre-hashing before bcrypt,
     // so any password length is accepted.
@@ -243,17 +256,26 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
             {/* Password */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('auth.password')}</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="••••••••"
-                placeholderTextColor={MiyabiColors.sumiFaded}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                textContentType="newPassword"
-              />
+              <View style={styles.inputWithIndicator}>
+                <TextInput
+                  style={[styles.input, { paddingRight: 48 }]}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="••••••••"
+                  placeholderTextColor={MiyabiColors.sumiFaded}
+                  secureTextEntry={!isPasswordVisible}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="newPassword"
+                />
+                <TouchableOpacity
+                  style={styles.eyeToggle}
+                  onPress={() => setIsPasswordVisible(!isPasswordVisible)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={styles.eyeIcon}>{isPasswordVisible ? '👁' : '👁‍🗨'}</Text>
+                </TouchableOpacity>
+              </View>
               {/* Password strength meter */}
               {password.length > 0 && (
                 <View style={styles.strengthMeterContainer}>
@@ -268,6 +290,35 @@ const SignUpScreen: React.FC<SignUpScreenProps> = ({ navigation, onSignUpSuccess
                     ]}
                   />
                 </View>
+              )}
+            </View>
+
+            {/* Confirm Password */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>{t('auth.confirmPassword')}</Text>
+              <View style={styles.inputWithIndicator}>
+                <TextInput
+                  style={[styles.input, { paddingRight: 48 }]}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="••••••••"
+                  placeholderTextColor={MiyabiColors.sumiFaded}
+                  secureTextEntry={!isConfirmPasswordVisible}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="newPassword"
+                />
+                <TouchableOpacity
+                  style={styles.eyeToggle}
+                  onPress={() => setIsConfirmPasswordVisible(!isConfirmPasswordVisible)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={styles.eyeIcon}>{isConfirmPasswordVisible ? '👁' : '👁‍🗨'}</Text>
+                </TouchableOpacity>
+              </View>
+              {/* Mismatch hint (shown only when both fields have content) */}
+              {confirmPassword.length > 0 && password !== confirmPassword && (
+                <Text style={styles.errorHint}>{t('auth.passwordsDoNotMatch')}</Text>
               )}
             </View>
             
@@ -412,6 +463,18 @@ const styles = StyleSheet.create({
   crossmark: {
     fontSize: 18,
     color: MiyabiColors.error,
+  },
+  eyeToggle: {
+    position: 'absolute' as const,
+    right: MiyabiSpacing.md,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+    width: 32,
+  },
+  eyeIcon: {
+    fontSize: 18,
   },
   errorHint: {
     fontSize: MiyabiTypography.fontSize.xs,

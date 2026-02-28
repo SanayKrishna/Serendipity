@@ -13,7 +13,7 @@
  * - Settings - Language and preferences
  */
 import React, { useEffect, useState, useRef, createContext } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Animated, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Animated, Dimensions, Easing } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -30,9 +30,6 @@ import { MiyabiColors, MiyabiSpacing, MiyabiBorderRadius, MiyabiShadows } from '
 import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authService } from '../services/AuthService';
-
-let LottieView: any = null;
-try { LottieView = require('lottie-react-native'); if (LottieView && LottieView.default) LottieView = LottieView.default; } catch (_) {}
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -139,6 +136,11 @@ const AppNavigator: React.FC = () => {
   const [welcomeName, setWelcomeName] = useState('');
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
 
+  // Zen ripple animation refs (pure Animated — no native deps)
+  const rippleAnims = useRef(
+    Array.from({ length: 3 }, () => new Animated.Value(0)),
+  ).current;
+
   // Cherry-blossom petal particles
   const blossomRefs = useRef(
     Array.from({ length: 8 }, () => ({
@@ -188,6 +190,18 @@ const AppNavigator: React.FC = () => {
     setWelcomeName(user?.username || '');
     setIsAuthenticated(true);
     setShowWelcome(true);
+
+    // Start zen ripple animations (staggered expanding rings)
+    rippleAnims.forEach((anim, i) => {
+      anim.setValue(0);
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 2400,
+        delay: i * 400,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
 
     // Start blossom particle animations
     blossomRefs.forEach((b) => {
@@ -246,19 +260,23 @@ const AppNavigator: React.FC = () => {
       {isAuthenticated ? (
         <AuthContext.Provider value={{ logout: handleLogout }}>
           <DrawerNavigator />
-          {/* Welcome overlay — Lottie animation + cherry blossom petals */}
+          {/* Welcome overlay — zen ripple animation + cherry blossom petals */}
           {showWelcome && (
             <Animated.View style={[styles.welcomeOverlay, { opacity: welcomeOpacity }]} pointerEvents="none">
-              {/* Lottie zen ripple animation (placeholder — swap with premium later) */}
-              {LottieView && (
-                <LottieView
-                  source={require('../../assets/lottie/welcome.json')}
-                  autoPlay
-                  loop={false}
-                  speed={0.8}
-                  style={styles.welcomeLottie}
-                />
-              )}
+              {/* Pure Animated zen ripple rings (sakura-pink expanding circles) */}
+              {rippleAnims.map((anim, i) => {
+                const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 2.5] });
+                const opacity = anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.5, 0.35, 0] });
+                return (
+                  <Animated.View
+                    key={`ripple-${i}`}
+                    style={[
+                      styles.welcomeRipple,
+                      { transform: [{ scale }], opacity },
+                    ]}
+                  />
+                );
+              })}
 
               {/* Floating cherry-blossom petals */}
               {blossomRefs.map((b, i) => {
@@ -327,11 +345,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 9999,
   },
-  welcomeLottie: {
+  welcomeRipple: {
     position: 'absolute',
-    width: 260,
-    height: 260,
-    opacity: 0.5,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    borderWidth: 2,
+    borderColor: 'rgba(255,183,197,0.5)',
   },
   welcomeJp: {
     fontSize: 36,

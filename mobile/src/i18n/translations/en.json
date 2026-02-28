@@ -252,7 +252,9 @@
     "usernameTaken": "Username taken",
     "passwordTooLong": "Password is too long — please keep it under 64 characters",
     "rememberMe": "Remember me",
-    "welcomeToFog": "Welcome to the Fog, {{name}}"
+    "welcomeToFog": "Welcome to the Fog, {{name}}",
+    "confirmPassword": "Confirm Password",
+    "passwordsDoNotMatch": "Passwords do not match"
   },
   "tutorial": {
     "mapTitle": "Your Fog-Shrouded Map",

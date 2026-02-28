@@ -35,6 +35,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
   const { t, i18n } = useTranslation();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
@@ -107,17 +108,26 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, onLoginSuccess, o
             {/* Password */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('auth.password')}</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="••••••••"
-                placeholderTextColor={MiyabiColors.sumiFaded}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                textContentType="password"
-              />
+              <View style={styles.passwordWrapper}>
+                <TextInput
+                  style={[styles.input, { paddingRight: 48 }]}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="••••••••"
+                  placeholderTextColor={MiyabiColors.sumiFaded}
+                  secureTextEntry={!isPasswordVisible}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="password"
+                />
+                <TouchableOpacity
+                  style={styles.eyeToggle}
+                  onPress={() => setIsPasswordVisible(!isPasswordVisible)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={styles.eyeIcon}>{isPasswordVisible ? '👁' : '👁‍🗨'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Remember Me */}
@@ -234,6 +244,21 @@ const styles = StyleSheet.create({
     fontSize: MiyabiTypography.fontSize.base,
     color: MiyabiColors.sumi,
     ...MiyabiShadows.sm,
+  },
+  passwordWrapper: {
+    position: 'relative' as const,
+  },
+  eyeToggle: {
+    position: 'absolute' as const,
+    right: MiyabiSpacing.md,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+    width: 32,
+  },
+  eyeIcon: {
+    fontSize: 18,
   },
   errorText: {
     fontSize: MiyabiTypography.fontSize.sm,
