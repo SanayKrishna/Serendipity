@@ -59,8 +59,8 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
        transform-origin:50% 50% pivots the rotation around the visual screen centre. */
     #map-wrapper { position:absolute; top:-80%; left:-80%; width:260%; height:260%; transform-origin:50% 50%; background:#e8e0d4; }
     #map { position:absolute; top:0; bottom:0; width:100%; height:100%; z-index:1; }
-    #fog-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:3; width:100%; height:100%; opacity:0; transition:opacity 0.8s ease; }
-    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:4; width:100%; height:100%; filter:blur(10px); }
+    #fog-canvas { display:none; }
+    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:4; width:100%; height:100%; filter:blur(8px); }
 
     .user-avatar-wrapper { width:60px; height:60px; transition:transform 0.15s ease-out; }
     .user-avatar-wrapper svg { width:60px; height:60px; display:block; }
@@ -88,8 +88,6 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   var fogRAF = null;
   // Map is intentionally fixed — only the user marker moves, not the viewport.
   var placeMarkers = []; // Leaflet markers for fog-circle place name labels
-  var fogCanvas = document.getElementById('fog-canvas');
-  var fogCtx = fogCanvas.getContext('2d');
   var cloudCanvas = document.getElementById('cloud-canvas');
   var cloudCtx = cloudCanvas.getContext('2d');
   var mapWrapper = document.getElementById('map-wrapper');
@@ -109,7 +107,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     return meters / mpp;
   }
 
-  function scheduleFogRedraw() { if (fogRAF) return; fogRAF = requestAnimationFrame(function(){ fogRAF = null; drawFog(); drawHexClouds(currentPins); }); }
+  function scheduleFogRedraw() { if (fogRAF) return; fogRAF = requestAnimationFrame(function(){ fogRAF = null; drawPinFog(currentPins); }); }
 
   // ── Hexagonal pin-cloud layer ────────────────────────────────────────────
   var HEX_R_M = 150; // hex circumradius in metres (flat-top)
@@ -118,128 +116,65 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   function _hexRnd(fq, fr){ var fs=-fq-fr,q=Math.round(fq),r=Math.round(fr),s=Math.round(fs),dq=Math.abs(q-fq),dr=Math.abs(r-fr),ds=Math.abs(s-fs); if(dq>dr&&dq>ds){q=-r-s;}else if(dr>ds){r=-q-s;} return {q:q,r:r}; }
   function _pinToHexCenter(lat, lon){ var xy=_latlonToXY(lat,lon),s=HEX_R_M,q=(2/3*xy.x)/s,r=(-1/3*xy.x+Math.sqrt(3)/3*xy.y)/s,hex=_hexRnd(q,r),cx=s*(3/2*hex.q),cy=s*(Math.sqrt(3)/2*hex.q+Math.sqrt(3)*hex.r); return _xyToLatlon(cx,cy,lat); }
 
-  function drawHexClouds(pins){
+  // ── Pin-Anchored Fog ─────────────────────────────────────────────────────
+  // Single unified fog renderer on cloud-canvas. NO global fog layer.
+  // Each standard pin (non-community) gets a 150m fog patch.
+  // The user's 50m flashlight + explored circles are subtracted in one pass.
+  function drawPinFog(pins){
     var w=mapWrapper.offsetWidth,h=mapWrapper.offsetHeight;
     cloudCanvas.width=w; cloudCanvas.height=h; cloudCtx.clearRect(0,0,w,h);
-    if(!map||!pins||pins.length===0) return;
-    var hexMap={};
-    pins.forEach(function(pin){
-      var ctr=_pinToHexCenter(pin.latitude,pin.longitude);
-      var key=Math.round(ctr.lat*8000)+','+Math.round(ctr.lon*8000);
-      if(!hexMap[key]) hexMap[key]=ctr;
-    });
-    var refLat=map.getCenter().lat;
-    var hexPx=metersToPixels(HEX_R_M,refLat);
-    Object.values(hexMap).forEach(function(center){
-      var pt=map.latLngToContainerPoint([center.lat,center.lon]);
-      cloudCtx.beginPath();
-      for(var i=0;i<6;i++){ var angle=Math.PI/180*(60*i); var vx=pt.x+hexPx*Math.cos(angle),vy=pt.y+hexPx*Math.sin(angle); if(i===0) cloudCtx.moveTo(vx,vy); else cloudCtx.lineTo(vx,vy); }
-      cloudCtx.closePath();
-      var grad=cloudCtx.createRadialGradient(pt.x,pt.y,hexPx*0.1,pt.x,pt.y,hexPx*1.05);
-      grad.addColorStop(0,'rgba(180,210,255,0.55)');
-      grad.addColorStop(0.65,'rgba(150,180,240,0.40)');
-      grad.addColorStop(1,'rgba(120,150,220,0.05)');
-      cloudCtx.fillStyle=grad; cloudCtx.fill();
-    });
-    // 50m clearing: carve explored circles out of hex clouds (cached in AsyncStorage)
-    if(exploredCircles && exploredCircles.length>0){
-      cloudCtx.globalCompositeOperation='destination-out';
-      for(var ci=0;ci<exploredCircles.length;ci++){
-        var ec=exploredCircles[ci];
-        var ept=map.latLngToContainerPoint([ec.lat,ec.lon]);
-        var er=metersToPixels(50,ec.lat);
-        var eg=cloudCtx.createRadialGradient(ept.x,ept.y,er*0.3,ept.x,ept.y,er);
-        eg.addColorStop(0,'rgba(0,0,0,1)'); eg.addColorStop(0.85,'rgba(0,0,0,0.95)'); eg.addColorStop(1,'rgba(0,0,0,0)');
-        cloudCtx.beginPath(); cloudCtx.arc(ept.x,ept.y,er,0,Math.PI*2); cloudCtx.fillStyle=eg; cloudCtx.fill();
-      }
-      cloudCtx.globalCompositeOperation='source-over';
-    }
-  }
-
-  // ── Procedural fog texture generator (called once, cached) ─────────────────
-  var _fogTexCanvas=null;
-  function _getFogPattern(ctx){
-    if(!_fogTexCanvas){
-      var S=256; _fogTexCanvas=document.createElement('canvas'); _fogTexCanvas.width=S; _fogTexCanvas.height=S;
-      var tc=_fogTexCanvas.getContext('2d'); var img=tc.createImageData(S,S); var d=img.data;
-      // Seeded PRNG for deterministic noise
-      var seed=42; function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647;}
-      // Tileable value-noise grid
-      var G=8,grid=[]; for(var gi=0;gi<G;gi++){grid[gi]=[]; for(var gj=0;gj<G;gj++) grid[gi][gj]=rnd();}
-      function smoothstep(t){return t*t*(3-2*t);}
-      function noise(x,y){ var gx=((x%1)+1)%1*G,gy=((y%1)+1)%1*G; var ix=Math.floor(gx)%G,iy=Math.floor(gy)%G;
-        var fx=smoothstep(gx-Math.floor(gx)),fy=smoothstep(gy-Math.floor(gy));
-        var a=grid[ix][iy],b=grid[(ix+1)%G][iy],c=grid[ix][(iy+1)%G],dd=grid[(ix+1)%G][(iy+1)%G];
-        return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c*(1-fx)*fy+dd*fx*fy; }
-      for(var py=0;py<S;py++){for(var px=0;px<S;px++){
-        var nx=px/S,ny=py/S;
-        var v=noise(nx,ny)*0.50+noise(nx*2.3,ny*2.3)*0.30+noise(nx*5.1,ny*5.1)*0.20;
-        var alpha=0.52+v*0.38; // range 0.52–0.90, avg ≈0.72
-        var idx=(py*S+px)*4; d[idx]=15;d[idx+1]=20;d[idx+2]=35;d[idx+3]=Math.floor(alpha*255);
-      }}
-      tc.putImageData(img,0,0);
-    }
-    return ctx.createPattern(_fogTexCanvas,'repeat');
-  }
-
-  function drawFog(){
-    var w=mapWrapper.offsetWidth, h=mapWrapper.offsetHeight;
-    fogCanvas.width=w; fogCanvas.height=h;
-    fogCtx.clearRect(0,0,w,h);
     if(!map) return;
-    // Proximity fog: only active when user is within 50m of any pin
-    var nearDist=9999;
-    if(currentPins&&currentPins.length>0){
-      for(var i=0;i<currentPins.length;i++){
-        var d=haversine(userLat,userLon,currentPins[i].latitude,currentPins[i].longitude);
-        if(d<nearDist) nearDist=d;
-      }
+    // Collect only standard (non-community) pins
+    var fogPins=[];
+    if(pins&&pins.length>0){
+      for(var i=0;i<pins.length;i++){ if(!pins[i].is_community) fogPins.push(pins[i]); }
     }
-    if(nearDist>50){ fogCanvas.style.opacity='0'; return; }
-    // Fog active — textured organic overlay with slow drift
-    fogCanvas.style.opacity='1';
-    var fogPat=_getFogPattern(fogCtx);
-    var driftT=Date.now()*0.0001;
-    fogCtx.save();
-    fogCtx.translate(Math.sin(driftT*0.7)*15,Math.cos(driftT)*12);
-    fogCtx.fillStyle=fogPat||'rgba(15,20,35,0.72)';
-    fogCtx.fillRect(-20,-20,w+40,h+40);
-    fogCtx.restore();
-    // Build composite mask on offscreen canvas so overlapping circles merge cleanly
-    // Using 'lighter' composite makes overlapping gradient edges add up (max-like)
-    // instead of creating dark Venn-diagram seams.
+    if(fogPins.length===0) return;
+    // ── Step 1: Build unified fog mask on offscreen canvas ──
+    // White = fog, transparent = clear.
+    // 'lighter' composite merges overlapping pin circles to max-alpha
+    // instead of additively darkening (prevents Venn-diagram seams).
     var mask=document.createElement('canvas'); mask.width=w; mask.height=h;
     var mc=mask.getContext('2d');
-    // User flashlight circle (primary, full-strength)
-    var pt=map.latLngToContainerPoint([userLat,userLon]);
-    var r=metersToPixels(50,userLat);
-    var g=mc.createRadialGradient(pt.x,pt.y,0,pt.x,pt.y,r*1.15);
-    g.addColorStop(0,'rgba(255,255,255,1)');
-    g.addColorStop(0.30,'rgba(255,255,255,0.85)');
-    g.addColorStop(0.50,'rgba(255,255,255,0.45)');
-    g.addColorStop(0.70,'rgba(255,255,255,0.20)');
-    g.addColorStop(0.85,'rgba(255,255,255,0.08)');
-    g.addColorStop(1,'rgba(255,255,255,0)');
-    mc.beginPath(); mc.arc(pt.x,pt.y,r*1.15,0,Math.PI*2); mc.fillStyle=g; mc.fill();
-    // Explored-circle clearings — use 'lighter' so overlaps merge smoothly
+    mc.globalCompositeOperation='lighter';
+    for(var i=0;i<fogPins.length;i++){
+      var pin=fogPins[i];
+      var pt=map.latLngToContainerPoint([pin.latitude,pin.longitude]);
+      var pxR=metersToPixels(150,pin.latitude);
+      var grad=mc.createRadialGradient(pt.x,pt.y,pxR*0.15,pt.x,pt.y,pxR);
+      grad.addColorStop(0,'rgba(255,255,255,1)');
+      grad.addColorStop(0.60,'rgba(255,255,255,0.70)');
+      grad.addColorStop(1,'rgba(255,255,255,0)');
+      mc.beginPath(); mc.arc(pt.x,pt.y,pxR,0,Math.PI*2); mc.fillStyle=grad; mc.fill();
+    }
+    // ── Step 2: Subtract user's 50m flashlight (hard-edged, no crescent) ──
+    mc.globalCompositeOperation='destination-out';
+    var upt=map.latLngToContainerPoint([userLat,userLon]);
+    var ur=metersToPixels(50,userLat);
+    var ug=mc.createRadialGradient(upt.x,upt.y,0,upt.x,upt.y,ur*1.1);
+    ug.addColorStop(0,'rgba(0,0,0,1)');
+    ug.addColorStop(0.75,'rgba(0,0,0,1)');
+    ug.addColorStop(1,'rgba(0,0,0,0)');
+    mc.beginPath(); mc.arc(upt.x,upt.y,ur*1.1,0,Math.PI*2); mc.fillStyle=ug; mc.fill();
+    // ── Step 3: Subtract explored circles ──
     if(exploredCircles&&exploredCircles.length>0){
-      mc.globalCompositeOperation='lighter';
       for(var ci=0;ci<exploredCircles.length;ci++){
         var ec=exploredCircles[ci];
         var ept=map.latLngToContainerPoint([ec.lat,ec.lon]);
         var er=metersToPixels(50,ec.lat);
-        var eg=mc.createRadialGradient(ept.x,ept.y,0,ept.x,ept.y,er*0.9);
-        eg.addColorStop(0,'rgba(255,255,255,0.55)');
-        eg.addColorStop(0.5,'rgba(255,255,255,0.25)');
-        eg.addColorStop(1,'rgba(255,255,255,0)');
-        mc.beginPath(); mc.arc(ept.x,ept.y,er*0.9,0,Math.PI*2); mc.fillStyle=eg; mc.fill();
+        var eg=mc.createRadialGradient(ept.x,ept.y,0,ept.x,ept.y,er);
+        eg.addColorStop(0,'rgba(0,0,0,1)'); eg.addColorStop(0.85,'rgba(0,0,0,1)'); eg.addColorStop(1,'rgba(0,0,0,0)');
+        mc.beginPath(); mc.arc(ept.x,ept.y,er,0,Math.PI*2); mc.fillStyle=eg; mc.fill();
       }
-      mc.globalCompositeOperation='source-over';
     }
-    // Stamp composite mask onto fog — punches a single unified hole
-    fogCtx.globalCompositeOperation='destination-out';
-    fogCtx.drawImage(mask,0,0);
-    fogCtx.globalCompositeOperation='source-over';
+    mc.globalCompositeOperation='source-over';
+    // ── Step 4: Paint fog colour, clip through mask ──
+    // Uniform fog colour across all patches — mask alpha controls density.
+    cloudCtx.fillStyle='rgba(160,195,240,0.50)';
+    cloudCtx.fillRect(0,0,w,h);
+    cloudCtx.globalCompositeOperation='destination-in';
+    cloudCtx.drawImage(mask,0,0);
+    cloudCtx.globalCompositeOperation='source-over';
   }
 
   var userLat=0, userLon=0;
@@ -330,10 +265,13 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   }
 
   function renderPins(pins){ pinMarkers.forEach(function(m){ map.removeLayer(m); }); pinMarkers = [];
-    // Proximity fog: hide pin markers beyond 20m when fog is active
-    var fogOn=false;
-    for(var fi=0;fi<pins.length;fi++){ if(haversine(userLat,userLon,pins[fi].latitude,pins[fi].longitude)<=50){fogOn=true;break;} }
-    var showPins=fogOn?pins.filter(function(p){return haversine(userLat,userLon,p.latitude,p.longitude)<=20;}):pins;
+    // Pin visibility rules:
+    // Community pins → ALWAYS visible (bypass fog)
+    // Standard pins  → visible only when user is within 50m
+    var showPins=pins.filter(function(p){
+      if(p.is_community) return true;
+      return haversine(userLat,userLon,p.latitude,p.longitude)<=50;
+    });
     var clusters = clusterPins(showPins);
     clusters.forEach(function(group){
       if (group.length===1){ var pin=group[0]; var icon=makePinIcon(pin); var marker=L.marker([pin.latitude,pin.longitude],{icon:icon}).addTo(map); marker.on('click',function(e){ L.DomEvent.stopPropagation(e); var type=pin.isMuted?'mutedPinPress':pin.is_suppressed?'suppressedPinPress':'pinPress'; pinTap(pin.id,type); }); pinMarkers.push(marker);
