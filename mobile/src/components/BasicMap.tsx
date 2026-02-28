@@ -60,7 +60,7 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
     #map-wrapper { position:absolute; top:-80%; left:-80%; width:260%; height:260%; transform-origin:50% 50%; background:#e8e0d4; }
     #map { position:absolute; top:0; bottom:0; width:100%; height:100%; z-index:1; }
     #fog-canvas { display:none; }
-    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:4; width:100%; height:100%; filter:blur(8px); }
+    #cloud-canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:4; width:100%; height:100%; filter:blur(6px); }
 
     .user-avatar-wrapper { width:60px; height:60px; transition:transform 0.15s ease-out; }
     .user-avatar-wrapper svg { width:60px; height:60px; display:block; }
@@ -120,6 +120,34 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
   // Single unified fog renderer on cloud-canvas. NO global fog layer.
   // Each standard pin (non-community) gets a 150m fog patch.
   // The user's 50m flashlight + explored circles are subtracted in one pass.
+
+  // ── Procedural white-grey cloud texture (generated once, cached) ───────
+  var _cloudTexCanvas=null;
+  function _getCloudPattern(ctx){
+    if(!_cloudTexCanvas){
+      var S=256; _cloudTexCanvas=document.createElement('canvas'); _cloudTexCanvas.width=S; _cloudTexCanvas.height=S;
+      var tc=_cloudTexCanvas.getContext('2d'); var img=tc.createImageData(S,S); var d=img.data;
+      var seed=37; function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647;}
+      // Tileable value-noise with 3 octaves for organic cloud look
+      var G=8,grid=[]; for(var gi=0;gi<G;gi++){grid[gi]=[]; for(var gj=0;gj<G;gj++) grid[gi][gj]=rnd();}
+      function smoothstep(t){return t*t*(3-2*t);}
+      function noise(x,y){ var gx=((x%1)+1)%1*G,gy=((y%1)+1)%1*G; var ix=Math.floor(gx)%G,iy=Math.floor(gy)%G;
+        var fx=smoothstep(gx-Math.floor(gx)),fy=smoothstep(gy-Math.floor(gy));
+        var a=grid[ix][iy],b=grid[(ix+1)%G][iy],c=grid[ix][(iy+1)%G],dd=grid[(ix+1)%G][(iy+1)%G];
+        return a*(1-fx)*(1-fy)+b*fx*(1-fy)+c*(1-fx)*fy+dd*fx*fy; }
+      for(var py=0;py<S;py++){for(var px=0;px<S;px++){
+        var nx=px/S,ny=py/S;
+        var v=noise(nx,ny)*0.50+noise(nx*2.3,ny*2.3)*0.30+noise(nx*5.1,ny*5.1)*0.20;
+        // White-grey cloud tones: RGB 210-250, alpha 0.45-0.85
+        var lum=Math.floor(210+v*40);            // 210..250 — bright white/grey
+        var alpha=Math.floor((0.45+v*0.40)*255); // 115..217 — organic density variation
+        var idx=(py*S+px)*4; d[idx]=lum; d[idx+1]=lum; d[idx+2]=Math.min(255,lum+8); d[idx+3]=alpha;
+      }}
+      tc.putImageData(img,0,0);
+    }
+    return ctx.createPattern(_cloudTexCanvas,'repeat');
+  }
+
   function drawPinFog(pins){
     var w=mapWrapper.offsetWidth,h=mapWrapper.offsetHeight;
     cloudCanvas.width=w; cloudCanvas.height=h; cloudCtx.clearRect(0,0,w,h);
@@ -141,9 +169,12 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
       var pin=fogPins[i];
       var pt=map.latLngToContainerPoint([pin.latitude,pin.longitude]);
       var pxR=metersToPixels(150,pin.latitude);
-      var grad=mc.createRadialGradient(pt.x,pt.y,pxR*0.15,pt.x,pt.y,pxR);
+      var grad=mc.createRadialGradient(pt.x,pt.y,pxR*0.05,pt.x,pt.y,pxR);
       grad.addColorStop(0,'rgba(255,255,255,1)');
-      grad.addColorStop(0.60,'rgba(255,255,255,0.70)');
+      grad.addColorStop(0.35,'rgba(255,255,255,0.90)');
+      grad.addColorStop(0.55,'rgba(255,255,255,0.55)');
+      grad.addColorStop(0.75,'rgba(255,255,255,0.25)');
+      grad.addColorStop(0.90,'rgba(255,255,255,0.08)');
       grad.addColorStop(1,'rgba(255,255,255,0)');
       mc.beginPath(); mc.arc(pt.x,pt.y,pxR,0,Math.PI*2); mc.fillStyle=grad; mc.fill();
     }
@@ -168,10 +199,16 @@ const buildHtml = (lat: number, lon: number): string => `<!DOCTYPE html>
       }
     }
     mc.globalCompositeOperation='source-over';
-    // ── Step 4: Paint fog colour, clip through mask ──
-    // Uniform fog colour across all patches — mask alpha controls density.
-    cloudCtx.fillStyle='rgba(160,195,240,0.50)';
-    cloudCtx.fillRect(0,0,w,h);
+    // ── Step 4: Paint cloud texture, clip through mask ──
+    // Procedural white-grey cloud pattern replaces flat colour fill.
+    // Slow drift offset makes the fog feel alive without extra RAF loops.
+    var cloudPat=_getCloudPattern(cloudCtx);
+    var driftT=Date.now()*0.00008;
+    cloudCtx.save();
+    cloudCtx.translate(Math.sin(driftT*0.7)*20,Math.cos(driftT)*16);
+    cloudCtx.fillStyle=cloudPat||'rgba(230,230,235,0.55)';
+    cloudCtx.fillRect(-30,-30,w+60,h+60);
+    cloudCtx.restore();
     cloudCtx.globalCompositeOperation='destination-in';
     cloudCtx.drawImage(mask,0,0);
     cloudCtx.globalCompositeOperation='source-over';

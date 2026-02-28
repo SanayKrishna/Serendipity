@@ -14,6 +14,7 @@
  */
 import React, { useEffect, useState, useRef, createContext } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Animated, Dimensions, Easing } from 'react-native';
+import Svg, { Path, Rect, Circle as SvgCircle } from 'react-native-svg';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -134,16 +135,35 @@ const AppNavigator: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showWelcome, setShowWelcome] = useState(false);
   const [welcomeName, setWelcomeName] = useState('');
-  const welcomeOpacity = useRef(new Animated.Value(0)).current;
 
-  // Zen ripple animation refs (pure Animated — no native deps)
-  const rippleAnims = useRef(
-    Array.from({ length: 3 }, () => new Animated.Value(0)),
+  // ── Seika Reveal animation values (pure Animated — no native deps) ──────
+  // Phase 1: Cloud bank covers screen
+  // Phase 2: Clouds part from center (translateX left/right halves)
+  // Phase 3: Torii gate fades in + scales up
+  // Phase 4: Text + particles appear
+  // Phase 5: Everything fades out
+  const seikaOverlay = useRef(new Animated.Value(0)).current;     // 0→1 fade in, hold, 1→0 fade out
+  const cloudLeftX = useRef(new Animated.Value(0)).current;       // 0 → -SCREEN_W*0.6
+  const cloudRightX = useRef(new Animated.Value(0)).current;      // 0 → +SCREEN_W*0.6
+  const toriiScale = useRef(new Animated.Value(0.3)).current;     // 0.3 → 1
+  const toriiOpacity = useRef(new Animated.Value(0)).current;     // 0 → 1
+  const textOpacity = useRef(new Animated.Value(0)).current;      // 0 → 1
+
+  // Drifting cloud wisps (6 animated layers for depth)
+  const cloudWisps = useRef(
+    Array.from({ length: 6 }, (_, i) => ({
+      anim: new Animated.Value(0),
+      y: SCREEN_H * 0.15 + (i * SCREEN_H * 0.12),
+      startX: i % 2 === 0 ? -SCREEN_W * 0.3 : SCREEN_W * 0.3,
+      endX: i % 2 === 0 ? -SCREEN_W * 0.9 : SCREEN_W * 0.9,
+      height: 60 + Math.random() * 40,
+      opacity: 0.3 + Math.random() * 0.4,
+    })),
   ).current;
 
-  // Cherry-blossom petal particles
+  // Cherry-blossom petal particles (carried over)
   const blossomRefs = useRef(
-    Array.from({ length: 8 }, () => ({
+    Array.from({ length: 10 }, () => ({
       x: Math.random() * SCREEN_W,
       startY: -30 - Math.random() * 80,
       endY: SCREEN_H + 40,
@@ -191,33 +211,71 @@ const AppNavigator: React.FC = () => {
     setIsAuthenticated(true);
     setShowWelcome(true);
 
-    // Start zen ripple animations (staggered expanding rings)
-    rippleAnims.forEach((anim, i) => {
-      anim.setValue(0);
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: 2400,
-        delay: i * 400,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
+    // Reset all animation values
+    seikaOverlay.setValue(0);
+    cloudLeftX.setValue(0);
+    cloudRightX.setValue(0);
+    toriiScale.setValue(0.3);
+    toriiOpacity.setValue(0);
+    textOpacity.setValue(0);
+    cloudWisps.forEach(w => w.anim.setValue(0));
+    blossomRefs.forEach(b => b.anim.setValue(0));
+
+    // ── Seika Reveal sequence (3500ms total) ──
+    // Phase 1 (0-400ms): Overlay fades in (cloud bank visible)
+    // Phase 2 (400-1800ms): Clouds part left/right + wisps drift outward
+    // Phase 3 (800-2000ms): Torii gate scales up + fades in
+    // Phase 4 (1600-2400ms): Text + blossoms appear
+    // Phase 5 (2800-3500ms): Everything fades out
+
+    // Start wisp drift animations (staggered)
+    cloudWisps.forEach((w, i) => {
+      w.anim.setValue(0);
+      Animated.timing(w.anim, {
+        toValue: 1, duration: 2400, delay: 200 + i * 120,
+        easing: Easing.out(Easing.cubic), useNativeDriver: true,
       }).start();
     });
 
-    // Start blossom particle animations
+    // Start blossom particle animations (delayed to Phase 4)
     blossomRefs.forEach((b) => {
       b.anim.setValue(0);
       Animated.timing(b.anim, {
-        toValue: 1,
-        duration: b.duration,
-        delay: b.delay,
+        toValue: 1, duration: b.duration, delay: b.delay + 1400,
         useNativeDriver: true,
       }).start();
     });
 
+    // Main orchestrated sequence
     Animated.sequence([
-      Animated.timing(welcomeOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-      Animated.delay(2200),
-      Animated.timing(welcomeOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
+      // Phase 1: Fade in
+      Animated.timing(seikaOverlay, { toValue: 1, duration: 400, useNativeDriver: true }),
+      // Phase 2+3+4: Parallel cloud-parting + torii reveal + text
+      Animated.parallel([
+        Animated.timing(cloudLeftX, {
+          toValue: -SCREEN_W * 0.65, duration: 1800,
+          easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true,
+        }),
+        Animated.timing(cloudRightX, {
+          toValue: SCREEN_W * 0.65, duration: 1800,
+          easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.delay(400),
+          Animated.parallel([
+            Animated.timing(toriiOpacity, { toValue: 1, duration: 800, useNativeDriver: true }),
+            Animated.spring(toriiScale, { toValue: 1, tension: 30, friction: 8, useNativeDriver: true }),
+          ]),
+        ]),
+        Animated.sequence([
+          Animated.delay(1200),
+          Animated.timing(textOpacity, { toValue: 1, duration: 600, useNativeDriver: true }),
+        ]),
+      ]),
+      // Hold the reveal
+      Animated.delay(600),
+      // Phase 5: Fade everything out
+      Animated.timing(seikaOverlay, { toValue: 0, duration: 700, useNativeDriver: true }),
     ]).start(() => setShowWelcome(false));
   };
 
@@ -260,25 +318,60 @@ const AppNavigator: React.FC = () => {
       {isAuthenticated ? (
         <AuthContext.Provider value={{ logout: handleLogout }}>
           <DrawerNavigator />
-          {/* Welcome overlay — zen ripple animation + cherry blossom petals */}
+          {/* ── Seika Reveal: Cloud-parting welcome animation ── */}
           {showWelcome && (
-            <Animated.View style={[styles.welcomeOverlay, { opacity: welcomeOpacity }]} pointerEvents="none">
-              {/* Pure Animated zen ripple rings (sakura-pink expanding circles) */}
-              {rippleAnims.map((anim, i) => {
-                const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 2.5] });
-                const opacity = anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.5, 0.35, 0] });
+            <Animated.View style={[styles.welcomeOverlay, { opacity: seikaOverlay }]} pointerEvents="none">
+
+              {/* Left cloud bank (slides left) */}
+              <Animated.View style={[styles.cloudBank, styles.cloudBankLeft, { transform: [{ translateX: cloudLeftX }] }]}>
+                {/* Layered cloud shapes for organic look */}
+                <View style={[styles.cloudBlob, { top: '15%', left: '10%', width: 200, height: 120 }]} />
+                <View style={[styles.cloudBlob, { top: '35%', left: '-5%', width: 260, height: 140 }]} />
+                <View style={[styles.cloudBlob, { top: '55%', left: '15%', width: 180, height: 100 }]} />
+                <View style={[styles.cloudBlob, { top: '70%', left: '-10%', width: 240, height: 130 }]} />
+              </Animated.View>
+
+              {/* Right cloud bank (slides right) */}
+              <Animated.View style={[styles.cloudBank, styles.cloudBankRight, { transform: [{ translateX: cloudRightX }] }]}>
+                <View style={[styles.cloudBlob, { top: '20%', right: '5%', width: 220, height: 130 }]} />
+                <View style={[styles.cloudBlob, { top: '40%', right: '-8%', width: 250, height: 120 }]} />
+                <View style={[styles.cloudBlob, { top: '60%', right: '10%', width: 190, height: 110 }]} />
+                <View style={[styles.cloudBlob, { top: '75%', right: '-5%', width: 230, height: 140 }]} />
+              </Animated.View>
+
+              {/* Drifting cloud wisps (atmospheric depth) */}
+              {cloudWisps.map((w, i) => {
+                const tx = w.anim.interpolate({ inputRange: [0, 1], outputRange: [w.startX, w.endX] });
+                const op = w.anim.interpolate({ inputRange: [0, 0.3, 0.8, 1], outputRange: [w.opacity, w.opacity, 0.1, 0] });
                 return (
                   <Animated.View
-                    key={`ripple-${i}`}
-                    style={[
-                      styles.welcomeRipple,
-                      { transform: [{ scale }], opacity },
-                    ]}
+                    key={`wisp-${i}`}
+                    style={{
+                      position: 'absolute', top: w.y, left: -20,
+                      width: SCREEN_W + 40, height: w.height,
+                      backgroundColor: 'rgba(240,240,245,0.25)',
+                      borderRadius: w.height / 2,
+                      transform: [{ translateX: tx }], opacity: op,
+                    }}
                   />
                 );
               })}
 
-              {/* Floating cherry-blossom petals */}
+              {/* Torii Gate silhouette (revealed as clouds part) */}
+              <Animated.View style={{ opacity: toriiOpacity, transform: [{ scale: toriiScale }] }}>
+                <Svg width={140} height={120} viewBox="0 0 140 120">
+                  {/* Horizontal beams */}
+                  <Rect x="5" y="15" width="130" height="8" rx="4" fill="rgba(255,255,255,0.9)" />
+                  <Rect x="15" y="30" width="110" height="5" rx="2.5" fill="rgba(255,255,255,0.7)" />
+                  {/* Upward curve on top beam */}
+                  <Path d="M0 18 Q70 0 140 18" stroke="rgba(255,255,255,0.9)" strokeWidth="4" fill="none" />
+                  {/* Vertical pillars */}
+                  <Rect x="25" y="23" width="7" height="97" rx="3" fill="rgba(255,255,255,0.8)" />
+                  <Rect x="108" y="23" width="7" height="97" rx="3" fill="rgba(255,255,255,0.8)" />
+                </Svg>
+              </Animated.View>
+
+              {/* Cherry-blossom petal particles */}
               {blossomRefs.map((b, i) => {
                 const translateY = b.anim.interpolate({ inputRange: [0, 1], outputRange: [b.startY, b.endY] });
                 const translateX = b.anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [b.x, b.x + b.sway, b.x - b.sway * 0.4] });
@@ -286,10 +379,9 @@ const AppNavigator: React.FC = () => {
                 const opacity = b.anim.interpolate({ inputRange: [0, 0.08, 0.7, 1], outputRange: [0, 0.85, 0.85, 0] });
                 return (
                   <Animated.Text
-                    key={i}
+                    key={`blossom-${i}`}
                     style={{
-                      position: 'absolute',
-                      fontSize: 20,
+                      position: 'absolute', fontSize: 20,
                       transform: [{ translateX }, { translateY }, { rotate }, { scale: b.scale }],
                       opacity,
                     }}
@@ -299,12 +391,16 @@ const AppNavigator: React.FC = () => {
                 );
               })}
 
-              <Text style={styles.welcomeJp}>ようこそ</Text>
-              <Text style={styles.welcomeEn}>
-                {welcomeName
-                  ? t('auth.welcomeToFog', { name: welcomeName })
-                  : t('auth.welcomeBack')}
-              </Text>
+              {/* Text (appears last) */}
+              <Animated.View style={{ opacity: textOpacity, alignItems: 'center', marginTop: 24 }}>
+                <Text style={styles.welcomeJp}>雲開</Text>
+                <Text style={styles.welcomeJpSub}>— seika —</Text>
+                <Text style={styles.welcomeEn}>
+                  {welcomeName
+                    ? t('auth.welcomeToFog', { name: welcomeName })
+                    : t('auth.welcomeBack')}
+                </Text>
+              </Animated.View>
             </Animated.View>
           )}
         </AuthContext.Provider>
@@ -340,30 +436,52 @@ const styles = StyleSheet.create({
   },
   welcomeOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15,20,35,0.88)',
+    backgroundColor: 'rgba(220,225,235,0.97)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 9999,
+    overflow: 'hidden',
   },
-  welcomeRipple: {
+  cloudBank: {
     position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    borderWidth: 2,
-    borderColor: 'rgba(255,183,197,0.5)',
+    top: 0,
+    bottom: 0,
+    width: SCREEN_W * 0.65,
+    backgroundColor: 'rgba(235,238,245,0.95)',
+  },
+  cloudBankLeft: {
+    left: 0,
+    borderTopRightRadius: SCREEN_W * 0.3,
+    borderBottomRightRadius: SCREEN_W * 0.3,
+  },
+  cloudBankRight: {
+    right: 0,
+    borderTopLeftRadius: SCREEN_W * 0.3,
+    borderBottomLeftRadius: SCREEN_W * 0.3,
+  },
+  cloudBlob: {
+    position: 'absolute',
+    backgroundColor: 'rgba(245,245,250,0.8)',
+    borderRadius: 80,
   },
   welcomeJp: {
-    fontSize: 36,
-    fontWeight: '300',
-    color: '#FFFFFF',
-    letterSpacing: 6,
-    marginBottom: 8,
+    fontSize: 42,
+    fontWeight: '200',
+    color: 'rgba(45,90,61,0.9)',
+    letterSpacing: 12,
+    marginBottom: 4,
+  },
+  welcomeJpSub: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: 'rgba(45,90,61,0.5)',
+    letterSpacing: 4,
+    marginBottom: 16,
   },
   welcomeEn: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '500',
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(45,90,61,0.65)',
     letterSpacing: 1,
   },
   drawer: {
